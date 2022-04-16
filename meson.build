@@ -1234,7 +1234,7 @@ if features['egl-helpers']
 endif
 
 if features['egl'] and features['egl-helpers']
-    sources += files('video/filter/vf_gpu.c')
+    sources += files('video/filter/vf_gpu_egl.c')
 endif
 
 if features['gl']
@@ -1258,8 +1258,18 @@ vulkan = dependency('vulkan', version: '>= 1.1.70', required: vulkan_opt)
 features += {'vulkan': vulkan.found()}
 if features['vulkan']
     dependencies += vulkan
+endif
+
+features += {'vk_khr_display': cc.has_function('vkCreateDisplayPlaneSurfaceKHR', prefix: '#include <vulkan/vulkan_core.h>',
+                                               dependencies: [vulkan])}
+
+if features['vulkan']
     sources += files('video/out/vulkan/context.c',
-                     'video/out/vulkan/utils.c')
+                     'video/out/vulkan/context_display.c',
+                     'video/out/vulkan/utils.c',
+                     'video/filter/vf_gpu_vulkan.c')
+elif features['vk_khr_display']
+    sources += files('video/out/vulkan/context_display.c')
 endif
 
 if features['vulkan'] and features['android']
@@ -1284,6 +1294,9 @@ if features['vk-khr-display']
     sources += files('video/out/vulkan/context_display.c')
 endif
 
+if features['vulkan'] or (features['egl'] and features['egl-helpers'])
+    sources += files('video/filter/vf_gpu.c')
+endif
 
 # hwaccel
 ffnvcodec = dependency('ffnvcodec', version: '>= 11.1.5.1', required: false)
