@@ -298,12 +298,12 @@ static struct mp_filter *gpu_create(struct mp_filter *parent, void *options)
 
     offscreen_ctx_set_current(priv->ctx, false);
 
-    MP_WARN(f, "This is experimental. Keep in mind:\n");
-    MP_WARN(f, " - OSD rendering is done in software.\n");
-    MP_WARN(f, " - Encoding will convert the RGB output to yuv420p in software.\n");
-    MP_WARN(f, " - Using this with --vo=gpu will filter the video twice!\n");
-    MP_WARN(f, "   (And you can't prevent this; they use the same options.)\n");
-    MP_WARN(f, " - Some features are simply not supported.\n");
+    // MP_WARN(f, "This is experimental. Keep in mind:\n");
+    // MP_WARN(f, " - OSD rendering is done in software.\n");
+    // MP_WARN(f, " - Encoding will convert the RGB output to yuv420p in software.\n");
+    // MP_WARN(f, " - Using this with --vo=gpu will filter the video twice!\n");
+    // MP_WARN(f, "   (And you can't prevent this; they use the same options.)\n");
+    // MP_WARN(f, " - Some features are simply not supported.\n");
 
     return f;
 
