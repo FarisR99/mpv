@@ -48,7 +48,8 @@ static void vk_ctx_destroy(void *p)
 }
 
 static struct offscreen_ctx *vk_offscreen_ctx_create(struct mpv_global *global,
-                                                     struct mp_log *log)
+                                                     struct mp_log *log,
+                                                     const char *device)
 {
     struct offscreen_ctx *ctx = talloc_zero(NULL, struct offscreen_ctx);
     talloc_set_destructor(ctx, vk_ctx_destroy);
@@ -80,7 +81,7 @@ static struct offscreen_ctx *vk_offscreen_ctx_create(struct mpv_global *global,
         .async_transfer = true,
         .async_compute = true,
         .queue_count = 1,
-        .device_name = NULL,
+        .device_name = device,
     });
     if (!vk->vulkan)
         goto error;

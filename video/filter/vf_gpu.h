@@ -31,5 +31,6 @@ struct offscreen_ctx {
 struct offscreen_context {
     const char *api;
     struct offscreen_ctx *(*offscreen_ctx_create)(struct mpv_global *,
-                                                  struct mp_log *);
+                                                  struct mp_log *,
+                                                  const char *);
 };

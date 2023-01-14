@@ -29,14 +29,8 @@
 #include "context.h"
 #include "utils.h"
 
-struct vulkan_opts {
-    char *device; // force a specific GPU
-    int swap_mode;
-    int queue_count;
-    bool async_transfer;
-    bool async_compute;
-};
-
+// static int vk_validate_dev(struct mp_log *log, const struct m_option *opt,
+//                            struct bstr name, const char **value)
 static inline OPT_STRING_VALIDATE_FUNC(vk_validate_dev)
 {
     struct bstr param = bstr0(*value);
