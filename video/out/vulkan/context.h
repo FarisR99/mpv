@@ -2,6 +2,7 @@
 
 #include "video/out/gpu/context.h"
 #include "common.h"
+#include "options/m_config.h"
 
 struct ra_vk_ctx_params {
     // See ra_swapchain_fns.get_vsync.
@@ -29,3 +30,13 @@ struct mpvk_ctx *ra_vk_ctx_get(struct ra_ctx *ctx);
 
 // Get the user requested Vulkan device name.
 char *ra_vk_ctx_get_device_name(struct ra_ctx *ctx);
+
+extern struct vulkan_opts {
+    char *device; // force a specific GPU
+    int swap_mode;
+    int queue_count;
+    bool async_transfer;
+    bool async_compute;
+};
+
+extern const struct m_sub_options vulkan_conf;
