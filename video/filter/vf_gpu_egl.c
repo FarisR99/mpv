@@ -47,7 +47,8 @@ static void gl_ctx_set_context(struct offscreen_ctx *ctx, bool enable)
 }
 
 static struct offscreen_ctx *gl_offscreen_ctx_create(struct mpv_global *global,
-                                                     struct mp_log *log)
+                                                     struct mp_log *log,
+                                                     const char *device)
 {
     struct offscreen_ctx *ctx = talloc_zero(NULL, struct offscreen_ctx);
     struct gl_offscreen_ctx *gl = talloc_zero(ctx, struct gl_offscreen_ctx);
