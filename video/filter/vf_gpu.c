@@ -24,9 +24,7 @@
 #include "options/options.h"
 #include "video/out/aspect.h"
 #include "video/out/gpu/video.h"
-#if HAVE_VULKAN
 #include "video/out/vulkan/context.h"
-#endif
 #include "video/filter/vf_gpu.h"
 
 extern const struct offscreen_context offscreen_vk;
@@ -36,9 +34,7 @@ static const struct offscreen_context *contexts[] = {
 #if HAVE_EGL
     &offscreen_egl,
 #endif
-#if HAVE_VULKAN
     &offscreen_vk,
-#endif
 };
 
 // static int offscreen_ctx_validate_api(struct mp_log *log, const struct m_option *opt,
