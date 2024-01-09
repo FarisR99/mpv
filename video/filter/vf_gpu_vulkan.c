@@ -82,6 +82,7 @@ static struct offscreen_ctx *vk_offscreen_ctx_create(struct mpv_global *global,
         .async_compute = true,
         .queue_count = 1,
         .device_name = device,
+        .allow_software = true
     });
     if (!vk->vulkan)
         goto error;
