@@ -2,6 +2,7 @@
 !/subprojects/packagefiles
 !/subprojects/*.wrap
 
+.vscode/
 build/
 build.sh
 rebuild.sh

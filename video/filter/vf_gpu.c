@@ -117,6 +117,7 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         .num_frames = 1,
         .frames = {in},
         .frame_id = ++(priv->next_frame_id),
+        .can_drop = false,
     };
 
     bool need_reconfig = m_config_cache_update(priv->vo_opts_cache);
