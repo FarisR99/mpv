@@ -20,7 +20,7 @@ typedef struct mp_vo_opts {
     bool all_workspaces;
     bool window_minimized;
     bool window_maximized;
-    bool focus_on_open;
+    int focus_on;
 
     int screen_id;
     char *screen_name;
@@ -256,6 +256,7 @@ typedef struct MPOpts {
     char *osd_status_msg;
     char *osd_msg[3];
     int player_idle_mode;
+    char **input_commands;
     bool consolecontrols;
     int playlist_pos;
     struct m_rel_time play_start;
@@ -399,6 +400,7 @@ struct dvd_opts {
 
 struct filter_opts {
     int deinterlace;
+    int field_parity;
 };
 
 extern const struct m_sub_options vo_sub_opts;

@@ -30,9 +30,6 @@
 #include "osdep/threads.h"
 #include "osdep/main-fn.h"
 
-#if HAVE_MACOS_TOUCHBAR
-#import "osdep/mac/touchbar.h"
-#endif
 #if HAVE_SWIFT
 #include "osdep/mac/swift.h"
 #endif
@@ -115,9 +112,9 @@ static void terminate_cocoa_application(void)
 
 - (void)sendEvent:(NSEvent *)event
 {
-    if ([self modalWindow] || ![_eventsResponder processKeyEvent:event])
+    if ([self modalWindow] || ![_eventsResponder.inputHelper processKeyWithEvent:event])
         [super sendEvent:event];
-    [_eventsResponder wakeup];
+    [_eventsResponder.inputHelper wakeup];
 }
 
 - (id)init
@@ -161,15 +158,7 @@ static const char mac_icon[] =
 #if HAVE_MACOS_TOUCHBAR
 - (NSTouchBar *)makeTouchBar
 {
-    TouchBar *tBar = [[TouchBar alloc] init];
-    [tBar setApp:self];
-    tBar.delegate = tBar;
-    tBar.customizationIdentifier = customID;
-    tBar.defaultItemIdentifiers = @[play, previousItem, nextItem, seekBar];
-    tBar.customizationAllowedItemIdentifiers = @[play, seekBar, previousItem,
-        nextItem, previousChapter, nextChapter, cycleAudio, cycleSubtitle,
-        currentPosition, timeLeft];
-    return tBar;
+    return [[TouchBar alloc] init];
 }
 #endif
 
@@ -192,25 +181,14 @@ static const char mac_icon[] =
 #endif
 }
 
-+ (const struct m_sub_options *)getMacOSConf
++ (const struct m_sub_options *)getMacConf
 {
     return &macos_conf;
 }
 
-+ (const struct m_sub_options *)getVoSubConf
++ (const struct m_sub_options *)getVoConf
 {
     return &vo_sub_opts;
-}
-
-- (void)queueCommand:(char *)cmd
-{
-    [_eventsResponder queueCommand:cmd];
-}
-
-- (void)stopMPV:(char *)cmd
-{
-    if (![_eventsResponder queueCommand:cmd])
-        terminate_cocoa_application();
 }
 
 - (void)applicationWillFinishLaunching:(NSNotification *)notification
@@ -225,7 +203,8 @@ static const char mac_icon[] =
 - (void)handleQuitEvent:(NSAppleEventDescriptor *)event
          withReplyEvent:(NSAppleEventDescriptor *)replyEvent
 {
-    [self stopMPV:"quit"];
+    if (![_eventsResponder.inputHelper command:@"quit"])
+        terminate_cocoa_application();
 }
 
 - (void)getUrl:(NSAppleEventDescriptor *)event
@@ -240,7 +219,7 @@ static const char mac_icon[] =
                      range:NSMakeRange(0, [MPV_PROTOCOL length])];
 
     url = [url stringByRemovingPercentEncoding];
-    [_eventsResponder handleFilesArray:@[url]];
+    [_eventsResponder.inputHelper openWithFiles:@[url]];
 }
 
 - (void)application:(NSApplication *)sender openFiles:(NSArray *)filenames
@@ -249,14 +228,10 @@ static const char mac_icon[] =
         mpv_shared_app().openCount--;
         return;
     }
-    [self openFiles:filenames];
-}
 
-- (void)openFiles:(NSArray *)filenames
-{
     SEL cmpsel = @selector(localizedStandardCompare:);
     NSArray *files = [filenames sortedArrayUsingSelector:cmpsel];
-    [_eventsResponder handleFilesArray:files];
+    [_eventsResponder.inputHelper openWithFiles:files];
 }
 @end
 
@@ -282,12 +257,6 @@ static MP_THREAD_VOID playback_thread(void *ctx_obj)
         // normally never reached - unless the cocoa mainloop hasn't started yet
         exit(r);
     }
-}
-
-void cocoa_register_menu_item_action(MPMenuKey key, void* action)
-{
-    if (application_instantiated)
-        [[NSApp menuBar] registerSelector:(SEL)action forKey:key];
 }
 
 static void init_cocoa_application(bool regular)
@@ -363,7 +332,7 @@ int cocoa_main(int argc, char *argv[])
         }
 
         mp_thread_create(&playback_thread_id, playback_thread, &ctx);
-        [[EventsResponder sharedInstance] waitForInputContext];
+        [[EventsResponder sharedInstance].inputHelper wait];
         cocoa_run_runloop();
 
         // This should never be reached: cocoa_run_runloop blocks until the

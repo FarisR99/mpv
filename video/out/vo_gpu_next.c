@@ -379,7 +379,7 @@ static void update_overlays(struct vo *vo, struct mp_osd_res res,
             }
             break;
         case SUBBITMAP_LIBASS:
-            if (src && item->video_color_space)
+            if (src && item->video_color_space && !pl_color_space_is_hdr(&src->params.color))
                 ol->color = src->params.color;
             ol->mode = PL_OVERLAY_MONOCHROME;
             ol->repr.alpha = PL_ALPHA_INDEPENDENT;
@@ -494,7 +494,11 @@ static bool hwdec_reconfig(struct priv *p, struct ra_hwdec *hwdec,
                            const struct mp_image_params *par)
 {
     if (p->hwdec_mapper) {
-        if (mp_image_params_equal(par, &p->hwdec_mapper->src_params)) {
+        if (mp_image_params_static_equal(par, &p->hwdec_mapper->src_params)) {
+            p->hwdec_mapper->src_params.repr.dovi = par->repr.dovi;
+            p->hwdec_mapper->dst_params.repr.dovi = par->repr.dovi;
+            p->hwdec_mapper->src_params.color.hdr = par->color.hdr;
+            p->hwdec_mapper->dst_params.color.hdr = par->color.hdr;
             return p->hwdec_mapper;
         } else {
             ra_hwdec_mapper_free(&p->hwdec_mapper);
@@ -701,9 +705,6 @@ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src
     // Update chroma location, must be done after initializing planes
     pl_frame_set_chroma_location(frame, par->chroma_location);
 
-    // Set the frame DOVI metadata
-    mp_map_dovi_metadata_to_pl(mpi, frame);
-
     if (mpi->film_grain)
         pl_film_grain_from_av(&frame->film_grain, (AVFilmGrainParams *) mpi->film_grain->data);
 
@@ -837,10 +838,19 @@ static void apply_target_options(struct priv *p, struct pl_frame *target)
         container = pl_raw_primaries_get(target->color.primaries);
         target->color.hdr.prim = pl_primaries_clip(gamut, container);
     }
-    if (opts->dither_depth > 0) {
+    int dither_depth = opts->dither_depth;
+    if (dither_depth == 0) {
+        struct ra_swapchain *sw = p->ra_ctx->swapchain;
+        if (sw->fns->color_depth) {
+            dither_depth = sw->fns->color_depth(sw);
+        } else if (!pl_color_transfer_is_hdr(target->color.transfer)) {
+            dither_depth = 8;
+        }
+    }
+    if (dither_depth > 0) {
         struct pl_bit_encoding *tbits = &target->repr.bits;
-        tbits->color_depth += opts->dither_depth - tbits->sample_depth;
-        tbits->sample_depth = opts->dither_depth;
+        tbits->color_depth += dither_depth - tbits->sample_depth;
+        tbits->sample_depth = dither_depth;
     }
 
     if (opts->icc_opts->icc_use_luma) {
@@ -996,14 +1006,15 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
     if (!should_draw || !pl_swapchain_start_frame(p->sw, &swframe)) {
         if (frame->current) {
             // Advance the queue state to the current PTS to discard unused frames
-            pl_queue_update(p->queue, NULL, pl_queue_params(
+            struct pl_queue_params qparams = *pl_queue_params(
                 .pts = frame->current->pts + pts_offset,
                 .radius = pl_frame_mix_radius(&params),
                 .vsync_duration = can_interpolate ? frame->ideal_frame_vsync_duration : 0,
+            );
 #if PL_API_VER >= 340
-                .drift_compensation = 0,
+            qparams.drift_compensation = 0;
 #endif
-            ));
+            pl_queue_update(p->queue, NULL, &qparams);
         }
         return;
     }
@@ -1029,10 +1040,10 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
             .radius = pl_frame_mix_radius(&params),
             .vsync_duration = can_interpolate ? frame->ideal_frame_vsync_duration : 0,
             .interpolation_threshold = opts->interpolation_threshold,
-#if PL_API_VER >= 340
-            .drift_compensation = 0,
-#endif
         );
+#if PL_API_VER >= 340
+        qparams.drift_compensation = 0;
+#endif
 
         // Depending on the vsync ratio, we may be up to half of the vsync
         // duration before the current frame time. This works fine because
@@ -1114,10 +1125,24 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
         goto done;
     }
 
-    const struct pl_frame *cur_frame = pl_frame_mix_nearest(&mix);
+    struct pl_frame ref_frame;
+    pl_frames_infer_mix(p->rr, &mix, &target, &ref_frame);
+
     mp_mutex_lock(&vo->params_mutex);
-    if (cur_frame && vo->params) {
-        vo->params->color.hdr = cur_frame->color.hdr;
+    if (!vo->target_params)
+        vo->target_params = talloc(vo, struct mp_image_params);
+    *vo->target_params = (struct mp_image_params){
+        .imgfmt_name = swframe.fbo->params.format
+                        ? swframe.fbo->params.format->name : NULL,
+        .w = swframe.fbo->params.w,
+        .h = swframe.fbo->params.h,
+        .color = target.color,
+        .repr = target.repr,
+        .rotate = target.rotation,
+    };
+
+    if (vo->params) {
+        vo->params->color.hdr = ref_frame.color.hdr;
         // Augment metadata with peak detection max_pq_y / avg_pq_y
         pl_renderer_get_hdr_metadata(p->rr, &vo->params->color.hdr);
     }
@@ -1206,6 +1231,7 @@ static int reconfig(struct vo *vo, struct mp_image_params *params)
         return -1;
 
     resize(vo);
+    TA_FREEP(&vo->target_params);
     return 0;
 }
 
@@ -1274,12 +1300,13 @@ static void video_screenshot(struct vo *vo, struct voctrl_screenshot *args)
     // Retrieve the current frame from the frame queue
     struct pl_frame_mix mix;
     enum pl_queue_status status;
-    status = pl_queue_update(p->queue, &mix, pl_queue_params(
+    struct pl_queue_params qparams = *pl_queue_params(
         .pts = p->last_pts,
+    );
 #if PL_API_VER >= 340
-        .drift_compensation = 0,
+        qparams.drift_compensation = 0;
 #endif
-    ));
+    status = pl_queue_update(p->queue, &mix, &qparams);
     assert(status != PL_QUEUE_EOF);
     if (status == PL_QUEUE_ERR) {
         MP_ERR(vo, "Unknown error occurred while trying to take screenshot!\n");
@@ -1462,17 +1489,17 @@ static inline void copy_frame_info_to_mp(struct frame_info *pl,
     }
 }
 
-static void update_ra_ctx_options(struct vo *vo)
+static void update_ra_ctx_options(struct vo *vo, struct ra_ctx_opts *ctx_opts)
 {
     struct priv *p = vo->priv;
     struct gl_video_opts *gl_opts = p->opts_cache->opts;
     bool border_alpha = (p->next_opts->border_background == BACKGROUND_COLOR &&
                          gl_opts->background_color.a != 255) ||
                          p->next_opts->border_background == BACKGROUND_NONE;
-    p->ra_ctx->opts.want_alpha = (gl_opts->background == BACKGROUND_COLOR &&
-                                  gl_opts->background_color.a != 255) ||
-                                  gl_opts->background == BACKGROUND_NONE ||
-                                  border_alpha;
+    ctx_opts->want_alpha = (gl_opts->background == BACKGROUND_COLOR &&
+                            gl_opts->background_color.a != 255) ||
+                            gl_opts->background == BACKGROUND_NONE ||
+                            border_alpha;
 }
 
 static int control(struct vo *vo, uint32_t request, void *data)
@@ -1490,7 +1517,7 @@ static int control(struct vo *vo, uint32_t request, void *data)
 
     case VOCTRL_UPDATE_RENDER_OPTS: {
         m_config_cache_update(p->opts_cache);
-        update_ra_ctx_options(vo);
+        update_ra_ctx_options(vo, &p->ra_ctx->opts);
         if (p->ra_ctx->fns->update_render_opts)
             p->ra_ctx->fns->update_render_opts(p->ra_ctx);
         update_render_options(vo);
@@ -1810,7 +1837,10 @@ static int preinit(struct vo *vo)
     p->log = vo->log;
 
     struct gl_video_opts *gl_opts = p->opts_cache->opts;
-    p->context = gpu_ctx_create(vo, gl_opts);
+    struct ra_ctx_opts *ctx_opts = mp_get_config_group(vo, vo->global, &ra_ctx_conf);
+    update_ra_ctx_options(vo, ctx_opts);
+    p->context = gpu_ctx_create(vo, ctx_opts);
+    talloc_free(ctx_opts);
     if (!p->context)
         goto err_out;
     // For the time being
@@ -1823,7 +1853,6 @@ static int preinit(struct vo *vo)
         .global = p->global,
         .ra_ctx = p->ra_ctx,
     };
-    update_ra_ctx_options(vo);
 
     vo->hwdec_devs = hwdec_devices_create();
     hwdec_devices_set_loader(vo->hwdec_devs, load_hwdec_api, vo);

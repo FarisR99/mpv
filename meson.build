@@ -7,7 +7,7 @@ project('mpv',
             'buildtype=debugoptimized',
             'b_lundef=false',
             'c_std=c11',
-            'warning_level=1',
+            'warning_level=2',
         ]
 )
 
@@ -267,6 +267,10 @@ flags = ['-D_FILE_OFFSET_BITS=64']
 link_flags = []
 
 test_flags = ['-Werror=implicit-function-declaration',
+              '-Wno-missing-field-initializers',
+              '-Wno-sign-compare',
+              '-Wno-unused-parameter',
+              '-Wno-cast-function-type',
               '-Wempty-body',
               '-Wdisabled-optimization',
               '-Wstrict-prototypes',
@@ -382,6 +386,7 @@ pthread_debug = get_option('pthread-debug').require(
 features += {'pthread-debug': pthread_debug.allowed()}
 
 add_project_arguments(flags, language: 'c')
+add_project_arguments(['-Wno-unused-parameter'], language: 'objc')
 add_project_link_arguments(link_flags, language: ['c', 'objc'])
 
 
@@ -392,12 +397,11 @@ features += {'cocoa': cocoa.found()}
 if features['cocoa']
     dependencies += cocoa
     sources += files('osdep/language-mac.c',
-                     'osdep/main-fn-mac.c',
                      'osdep/path-mac.m',
                      'osdep/utils-mac.c',
                      'osdep/mac/application.m',
-                     'osdep/mac/events.m',
-                     'osdep/mac/menubar.m')
+                     'osdep/mac/events.m')
+    main_fn_source = files('osdep/main-fn-mac.c')
 endif
 
 if posix
@@ -414,8 +418,8 @@ if posix
 endif
 
 if posix and not features['cocoa']
-    sources += files('osdep/main-fn-unix.c',
-                     'osdep/language-posix.c')
+    sources += files('osdep/language-posix.c')
+    main_fn_source = files('osdep/main-fn-unix.c')
 endif
 
 if darwin
@@ -493,21 +497,21 @@ if features['win32-desktop']
                           cc.find_library('dwmapi'),
                           cc.find_library('gdi32'),
                           cc.find_library('imm32'),
+                          cc.find_library('ntdll'),
                           cc.find_library('ole32'),
                           cc.find_library('uuid'),
                           cc.find_library('uxtheme'),
-                          cc.find_library('version'),
-                          cc.find_library('winmm')]
+                          cc.find_library('version')]
     dependencies += win32_desktop_libs
     path_source = files('osdep/path-win.c')
     subprocess_source = files('osdep/subprocess-win.c')
     sources += files('input/ipc-win.c',
                      'osdep/language-win.c',
-                     'osdep/main-fn-win.c',
                      'osdep/terminal-win.c',
                      'video/out/w32_common.c',
                      'video/out/win32/displayconfig.c',
                      'video/out/win32/droptarget.c')
+    main_fn_source = files('osdep/main-fn-win.c')
 endif
 
 if not posix and not features['win32-desktop']
@@ -1143,9 +1147,10 @@ if features['egl-angle']
     sources += files('video/out/opengl/angle_dynamic.c')
 endif
 
-egl_dep = cc.find_library('EGL', required: get_option('egl-angle-lib'))
+egl_dep = cc.find_library('EGL', required:
+    get_option('egl-angle-lib').require(features['egl-angle']))
 egl_angle_lib = get_option('egl-angle-lib').require(
-    features['egl-angle'] and cc.has_function('eglCreateWindowSurface',
+    egl_dep.found() and cc.has_function('eglCreateWindowSurface',
                                                dependencies: egl_dep,
                                                prefix: '#include <EGL/egl.h>'),
     error_message: 'egl-angle-lib could not be found!',
@@ -1168,7 +1173,7 @@ if features['d3d11'] or features['egl-angle-win32']
     sources += files('video/out/gpu/d3d11_helpers.c')
 endif
 
-egl = dependency('egl', version: '> 1.4.0', required: get_option('egl'))
+egl = dependency('egl', version: '>= 1.4.0', required: get_option('egl'))
 features += {'egl': egl.found() and gl_allowed}
 if features['egl']
     dependencies += egl
@@ -1222,12 +1227,11 @@ if plain_gl.allowed()
     features += {'gl': true}
 endif
 
-features += {'egl-helpers': features['egl'] or egl_android.found() or egl_angle_win32.allowed()}
-if features['egl-helpers']
+if features['egl'] or features['egl-android'] or features['egl-angle-win32']
     sources += files('video/out/opengl/egl_helpers.c')
 endif
 
-if features['egl'] and features['egl-helpers']
+if features['gl'] and features['egl']
     sources += files('video/filter/vf_gpu_egl.c')
 endif
 
@@ -1463,7 +1467,7 @@ videotoolbox_pl = get_option('videotoolbox-pl').require(
     error_message: 'vulkan or CV metal support could be found!',
 )
 features += {'videotoolbox-pl': videotoolbox_pl.allowed()}
-if features['videotoolbox-gl'] or features['videotoolbox-pl']
+if features['videotoolbox-gl'] or features['videotoolbox-pl'] or features['ios-gl']
     sources += files('video/out/hwdec/hwdec_vt.c')
 endif
 if features['videotoolbox-gl']
@@ -1527,11 +1531,14 @@ features += {'swift': swift.allowed()}
 swift_sources = []
 if features['cocoa'] and features['swift']
     swift_sources += files('osdep/mac/libmpv_helper.swift',
+                           'osdep/mac/input_helper.swift',
                            'osdep/mac/log_helper.swift',
-                           'osdep/mac/mpv_helper.swift',
+                           'osdep/mac/menu_bar.swift',
+                           'osdep/mac/option_helper.swift',
                            'osdep/mac/precise_timer.swift',
                            'osdep/mac/swift_compat.swift',
                            'osdep/mac/swift_extensions.swift',
+                           'osdep/mac/type_helper.swift',
                            'video/out/mac/common.swift',
                            'video/out/mac/title_bar.swift',
                            'video/out/mac/view.swift',
@@ -1562,17 +1569,17 @@ if features['macos-media-player']
     swift_sources += files('osdep/mac/remote_command_center.swift')
 endif
 
-if features['swift'] and swift_sources.length() > 0
-    subdir('osdep/mac')
-endif
-
 macos_touchbar = get_option('macos-touchbar').require(
     features['cocoa'] and cc.has_header('AppKit/NSTouchBar.h'),
     error_message: 'Either cocoa could not be found or AppKit/NSTouchBar.h could not be found!',
 )
 features += {'macos-touchbar': macos_touchbar.allowed()}
 if features['macos-touchbar']
-    sources += files('osdep/mac/touchbar.m')
+    swift_sources += files('osdep/mac/touch_bar.swift')
+endif
+
+if features['swift'] and swift_sources.length() > 0
+    subdir('osdep/mac')
 endif
 
 
@@ -1760,7 +1767,7 @@ if get_option('cplayer')
                  rename: 'mpv.svg')
     install_data('etc/mpv-symbolic.svg', install_dir: join_paths(hicolor_dir, 'symbolic', 'apps'))
 
-    mpv = executable('mpv', objects: libmpv.extract_all_objects(recursive: true), dependencies: dependencies,
+    mpv = executable('mpv', main_fn_source, objects: libmpv.extract_all_objects(recursive: true), dependencies: dependencies,
                      win_subsystem: 'windows,6.0', install: true)
 
     # Older meson versions generate this in the player subdirectory.

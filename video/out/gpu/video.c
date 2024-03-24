@@ -212,6 +212,7 @@ struct gl_video {
     struct ra_tex *merge_tex[4];
     struct ra_tex *scale_tex[4];
     struct ra_tex *integer_tex[4];
+    struct ra_tex *chroma_tex[4];
     struct ra_tex *indirect_tex;
     struct ra_tex *blend_subs_tex;
     struct ra_tex *error_diffusion_tex[2];
@@ -573,6 +574,7 @@ static void uninit_rendering(struct gl_video *p)
         ra_tex_free(p->ra, &p->merge_tex[n]);
         ra_tex_free(p->ra, &p->scale_tex[n]);
         ra_tex_free(p->ra, &p->integer_tex[n]);
+        ra_tex_free(p->ra, &p->chroma_tex[n]);
     }
 
     ra_tex_free(p->ra, &p->indirect_tex);
@@ -2199,6 +2201,23 @@ static void pass_read_video(struct gl_video *p)
         }
     }
 
+    // If chroma textures are in a subsampled semi-planar format and rotated,
+    // introduce an explicit conversion pass to avoid breaking chroma scalers.
+    for (int n = 0; n < 4; n++) {
+        if (img[n].tex && img[n].type == PLANE_CHROMA &&
+            img[n].tex->params.format->num_components == 2 &&
+            p->image_params.rotate % 180 == 90 &&
+            p->ra_format.chroma_w != 1)
+        {
+            GLSLF("// chroma fix for rotated plane %d\n", n);
+            copy_image(p, &(int){0}, img[n]);
+            pass_describe(p, "chroma fix for rotated plane");
+            finish_pass_tex(p, &p->chroma_tex[n], img[n].w, img[n].h);
+            img[n] = image_wrap(p->chroma_tex[n], img[n].type,
+                                img[n].components);
+        }
+    }
+
     // At this point all planes are finalized but they may not be at the
     // required size yet. Furthermore, they may have texture offsets that
     // require realignment.
@@ -3193,7 +3212,7 @@ static void gl_video_interpolate_frame(struct gl_video *p, struct vo_frame *t,
 
         struct mp_image *f = t->frames[i];
         uint64_t f_id = t->frame_id + i;
-        if (!mp_image_params_equal(&f->params, &p->real_image_params))
+        if (!mp_image_params_static_equal(&f->params, &p->real_image_params))
             continue;
 
         if (f_id > p->surfaces[p->surface_idx].id) {
@@ -4016,7 +4035,7 @@ void gl_video_config(struct gl_video *p, struct mp_image_params *params)
     unmap_overlay(p);
     unref_current_image(p);
 
-    if (!mp_image_params_equal(&p->real_image_params, params)) {
+    if (!mp_image_params_static_equal(&p->real_image_params, params)) {
         uninit_video(p);
         p->real_image_params = *params;
         p->image_params = *params;

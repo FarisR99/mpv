@@ -37,6 +37,12 @@
 
 #define OUTBUF_SIZE 65536
 
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(60, 26, 100)
+#define AV_PROFILE_UNKNOWN FF_PROFILE_UNKNOWN
+#define AV_PROFILE_DTS_HD_HRA FF_PROFILE_DTS_HD_HRA
+#define AV_PROFILE_DTS_HD_MA FF_PROFILE_DTS_HD_MA
+#endif
+
 struct spdifContext {
     struct mp_log   *log;
     enum AVCodecID   codec_id;
@@ -53,7 +59,11 @@ struct spdifContext {
     struct mp_decoder public;
 };
 
+#if LIBAVCODEC_VERSION_MAJOR < 61
 static int write_packet(void *p, uint8_t *buf, int buf_size)
+#else
+static int write_packet(void *p, const uint8_t *buf, int buf_size)
+#endif
 {
     struct spdifContext *ctx = p;
 
@@ -90,7 +100,7 @@ static void determine_codec_params(struct mp_filter *da, AVPacket *pkt,
                                    int *out_profile, int *out_rate)
 {
     struct spdifContext *spdif_ctx = da->priv;
-    int profile = FF_PROFILE_UNKNOWN;
+    int profile = AV_PROFILE_UNKNOWN;
     AVCodecContext *ctx = NULL;
     AVFrame *frame = NULL;
 
@@ -115,7 +125,7 @@ static void determine_codec_params(struct mp_filter *da, AVPacket *pkt,
         av_parser_close(parser);
     }
 
-    if (profile != FF_PROFILE_UNKNOWN || spdif_ctx->codec_id != AV_CODEC_ID_DTS)
+    if (profile != AV_PROFILE_UNKNOWN  || spdif_ctx->codec_id != AV_CODEC_ID_DTS)
         return;
 
     const AVCodec *codec = avcodec_find_decoder(spdif_ctx->codec_id);
@@ -145,7 +155,7 @@ done:
     av_frame_free(&frame);
     avcodec_free_context(&ctx);
 
-    if (profile == FF_PROFILE_UNKNOWN)
+    if (profile == AV_PROFILE_UNKNOWN)
         MP_WARN(da, "Failed to parse codec profile.\n");
 }
 
@@ -155,7 +165,7 @@ static int init_filter(struct mp_filter *da)
 
     AVPacket *pkt = spdif_ctx->avpkt;
 
-    int profile = FF_PROFILE_UNKNOWN;
+    int profile = AV_PROFILE_UNKNOWN;
     int c_rate = 0;
     determine_codec_params(da, pkt, &profile, &c_rate);
     MP_VERBOSE(da, "In: profile=%d samplerate=%d\n", profile, c_rate);
@@ -208,15 +218,15 @@ static int init_filter(struct mp_filter *da)
         num_channels                    = 2;
         break;
     case AV_CODEC_ID_DTS: {
-        bool is_hd = profile == FF_PROFILE_DTS_HD_HRA ||
-                     profile == FF_PROFILE_DTS_HD_MA  ||
-                     profile == FF_PROFILE_UNKNOWN;
+        bool is_hd = profile == AV_PROFILE_DTS_HD_HRA ||
+                     profile == AV_PROFILE_DTS_HD_MA  ||
+                     profile == AV_PROFILE_UNKNOWN;
 
         // Apparently, DTS-HD over SPDIF is specified to be 7.1 (8 channels)
         // for DTS-HD MA, and stereo (2 channels) for DTS-HD HRA. The bit
         // streaming rate as well as the signaled channel count are defined
         // based on this value.
-        int dts_hd_spdif_channel_count = profile == FF_PROFILE_DTS_HD_HRA ?
+        int dts_hd_spdif_channel_count = profile == AV_PROFILE_DTS_HD_HRA ?
                                          2 : 8;
         if (spdif_ctx->use_dts_hd && is_hd) {
             av_dict_set_int(&format_opts, "dtshd_rate",

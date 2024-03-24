@@ -17,9 +17,9 @@
 
 #import <Cocoa/Cocoa.h>
 #include "osdep/mac/application.h"
-#import "osdep/mac/menubar_objc.h"
 
 @class CocoaCB;
+@class MenuBar;
 struct mpv_event;
 struct mpv_handle;
 
@@ -27,12 +27,9 @@ struct mpv_handle;
 
 - (NSImage *)getMPVIcon;
 - (void)processEvent:(struct mpv_event *)event;
-- (void)queueCommand:(char *)cmd;
-- (void)stopMPV:(char *)cmd;
-- (void)openFiles:(NSArray *)filenames;
 - (void)initCocoaCb:(struct mpv_handle *)ctx;
-+ (const struct m_sub_options *)getMacOSConf;
-+ (const struct m_sub_options *)getVoSubConf;
++ (const struct m_sub_options *)getMacConf;
++ (const struct m_sub_options *)getVoConf;
 
 @property(nonatomic, retain) MenuBar *menuBar;
 @property(nonatomic, assign) size_t openCount;

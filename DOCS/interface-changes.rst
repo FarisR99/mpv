@@ -17,9 +17,12 @@ a large part of the user interface and APIs.
 
 Also see compatibility.rst.
 
-This document lists changes to them. New changes are added to the top. Usually,
-only incompatible or important changes are mentioned. New options/commands/etc.
-are not always listed.
+This document lists changes to them. New options/commands/etc. are not always
+listed.
+
+**Never** write to this file directly except when making releases. New changes
+are added in the interface-changes directory instead. See contribute.md for more
+details.
 
 Interface changes
 =================
@@ -28,6 +31,7 @@ Interface changes
 
  --- mpv 0.38.0 ---
     - add `begin-vo-dragging` command
+    - add `--deinterlace-field-parity` option
     - add `--volume-gain`, `--volume-gain-min`, and `--volume-gain-max` options
     - add `current-gpu-context` property
     - add `--secondary-sub-ass-override` option
@@ -60,6 +64,10 @@ Interface changes
     - remove `--alpha` and reintroduce `--background` option for better control
       over blending alpha components into specific background types
     - add `--border-background` option
+    - add `video-target-params` property
+    - add `hdr10plus` sub-parameter to `format` video filter
+    - remove `--focus-on-open` and add replacement `--focus-on`
+    - remove debanding from the high-quality profile
  --- mpv 0.37.0 ---
     - `--save-position-on-quit` and its associated commands now store state files
       in %LOCALAPPDATA% instead of %APPDATA% directory by default on Windows.

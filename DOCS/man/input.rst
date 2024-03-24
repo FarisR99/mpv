@@ -483,11 +483,11 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
         is currently playing, start playback. (Always starts with the added
         file, even if the playlist was not empty before running this command.)
 
-    The third argument is an insertion index, used only by the `insert-at` and
-    `insert-at-play` actions. When used with those actions, the new item will be
-    insert at the <index> position in the playlist, or appended to the end if
-    <index> is less than 0 or greater than the size of the playlist. This
-    argument will be ignored for all other actions.
+    The third argument is an insertion index, used only by the ``insert-at`` and
+    ``insert-at-play`` actions. When used with those actions, the new item will
+    be inserted at the index position in the playlist, or appended to the end if
+    index is less than 0 or greater than the size of the playlist. This argument
+    will be ignored for all other actions.
 
     The fourth argument is a list of options and values which should be set
     while the file is playing. It is of the form ``opt1=value1,opt2=value2,..``.
@@ -524,11 +524,11 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
         new playlist, even if the internal playlist was not empty before running
         this command.)
 
-    The third argument is an insertion index, used only by the `insert-at` and
-    `insert-at-play` actions. When used with those actions, the new playlist
-    will be insert at the <index> position in the internal playlist, or appended
-    to the end if <index> is less than 0 or greater than the size of the
-    internal playlist. This argument will be ignored for all other actions.
+    The third argument is an insertion index, used only by the ``insert-at`` and
+    ``insert-at-play`` actions. When used with those actions, the new playlist
+    will be inserted at the index position in the internal playlist, or appended
+    to the end if index is less than 0 or greater than the size of the internal
+    playlist. This argument will be ignored for all other actions.
 
 ``playlist-clear``
     Clear the playlist, except the currently played file.
@@ -1258,6 +1258,18 @@ Input Commands that are Possibly Subject to Change
         Always use named arguments (``mpv_command_node()``). Lua scripts should
         use the ``mp.create_osd_overlay()`` helper instead of invoking this
         command directly.
+
+``escape-ass <text>``
+    Modify ``text`` so that commands and functions that interpret ASS tags,
+    such as ``osd-overlay`` and ``mp.create_osd_overlay``, will display it
+    verbatim, and return it. This can only be used through the client API or
+    from a script using ``mp.command_native``.
+
+    .. admonition:: Example
+
+        ``mp.osd_message(mp.command_native({"escape-ass", "foo {bar}"}))``
+
+        This line of Lua prints "foo \\{bar}" on the OSD.
 
 ``script-message [<arg1> [<arg2> [...]]]``
     Send a message to all clients, and pass it the following list of arguments.
@@ -2647,6 +2659,11 @@ Property list
 
     Has the same sub-properties as ``video-params``.
 
+``video-target-params``
+    Same as ``video-params``, but with the target properties that VO outputs to.
+
+    Has the same sub-properties as ``video-params``.
+
 ``video-frame-info``
     Approximate information of the current frame. Note that if any of these
     are used on OSD, the information might be off by a few frames due to OSD
@@ -2798,6 +2815,19 @@ Property list
 
     Any of these properties may be unavailable or set to dummy values if the
     VO window is not created or visible.
+
+``term-size``
+    The current terminal size.
+
+    This has two sub-properties.
+
+    ``term-size/w``
+        width of the terminal in cells
+    ``term-size/h``
+        height of the terminal in cells
+
+    This property is not observable. Reacting to size changes requires
+    polling.
 
 ``window-id``
     Read-only - mpv's window id. May not always be available, i.e due to window
@@ -3083,6 +3113,11 @@ Property list
 
     ``track-list/N/demux-par``
         Pixel aspect ratio.
+
+    ``track-list/N/format-name``
+        Short name for format from ffmpeg. If the track is audio, this will be
+        the name of the sample format. If the track is video, this will be the
+        name of the pixel format.
 
     ``track-list/N/audio-channels`` (deprecated)
         Deprecated alias for ``track-list/N/demux-channel-count``.
@@ -3731,7 +3766,9 @@ Normally, properties are formatted as human-readable text, meant to be
 displayed on OSD or on the terminal. It is possible to retrieve an unformatted
 (raw) value from a property by prefixing its name with ``=``. These raw values
 can be parsed by other programs and follow the same conventions as the options
-associated with the properties.
+associated with the properties. Additionally, there is a ``>`` prefix to format
+human-readable text, with fixed precision for floating-point values. This is
+useful for printing values where a constant width is important.
 
 .. admonition:: Examples
 
@@ -3739,6 +3776,10 @@ associated with the properties.
       minutes 23 seconds)
     - ``${=time-pos}`` expands to ``863.4`` (same time, plus 400 milliseconds -
       milliseconds are normally not shown in the formatted case)
+
+    - ``${avsync}`` expands to ``+0.003``
+    - ``${>avsync}`` expands to ``+0.0030``
+    - ``${=avsync}`` expands to ``0.003028``
 
 Sometimes, the difference in amount of information carried by raw and formatted
 property values can be rather big. In some cases, raw values have more
