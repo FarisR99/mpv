@@ -138,10 +138,20 @@ Available audio output drivers are:
         passthrough (even if the device reports it as supported). Use with
         extreme care.
 
-
 ``coreaudio_exclusive`` (macOS only)
     Native macOS audio output driver using direct device access and
     exclusive mode (bypasses the sound server).
+
+``avfoundation`` (macOS only)
+    Native macOS audio output driver using ``AVSampleBufferAudioRenderer``
+    in AVFoundation, which supports `spatial audio
+    <https://support.apple.com/en-us/HT211775>`_.
+
+    .. warning::
+
+        Turning on spatial audio may hang the playback
+        if mpv is not started out of the bundle,
+        though playback with spatial audio off always works.
 
 ``openal``
     OpenAL audio output driver.
@@ -174,15 +184,12 @@ Available audio output drivers are:
         changes. "native" lets the sound server determine buffers.
 
     ``--pulse-latency-hacks=<yes|no>``
-        Enable hacks to workaround PulseAudio timing bugs (default: no). If
+        Enable hacks to workaround PulseAudio timing bugs (default: yes). If
         enabled, mpv will do elaborate latency calculations on its own. If
         disabled, it will use PulseAudio automatically updated timing
         information. Disabling this might help with e.g. networked audio or
         some plugins, while enabling it might help in some unknown situations
-        (it used to be required to get good behavior on old PulseAudio versions).
-
-        If you have stuttering video when using pulse, try to enable this
-        option. (Or try to update PulseAudio.)
+        (it is currently enabled due to known bugs with PulseAudio 16.0).
 
     ``--pulse-allow-suspended=<yes|no>``
         Allow mpv to use PulseAudio even if the sink is suspended (default: no).

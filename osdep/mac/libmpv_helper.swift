@@ -23,14 +23,14 @@ let glDummy: @convention(c) () -> Void = {}
 
 class LibmpvHelper {
     var log: LogHelper
-    var mpvHandle: OpaquePointer?
+    var mpv: OpaquePointer?
     var mpvRenderContext: OpaquePointer?
     var fbo: GLint = 1
-    let deinitLock = NSLock()
+    let uninitLock = NSLock()
 
-    init(_ mpv: OpaquePointer, _ mpLog: OpaquePointer?) {
-        mpvHandle = mpv
-        log = LogHelper(mpLog)
+    init(_ mpv: OpaquePointer, _ log: LogHelper) {
+        self.mpv = mpv
+        self.log = log
     }
 
     func initRender() {
@@ -47,8 +47,8 @@ class LibmpvHelper {
                 mpv_render_param()
             ]
 
-            if (mpv_render_context_create(&mpvRenderContext, mpvHandle, &params) < 0) {
-                log.sendError("Render context init has failed.")
+            if (mpv_render_context_create(&mpvRenderContext, mpv, &params) < 0) {
+                log.error("Render context init has failed.")
                 exit(1)
             }
         }
@@ -73,7 +73,7 @@ class LibmpvHelper {
 
     func setRenderUpdateCallback(_ callback: @escaping mpv_render_update_fn, context object: AnyObject) {
         if mpvRenderContext == nil {
-            log.sendWarning("Init mpv render context first.")
+            log.warning("Init mpv render context first.")
         } else {
             mpv_render_context_set_update_callback(mpvRenderContext, callback, TypeHelper.bridge(obj: object))
         }
@@ -81,7 +81,7 @@ class LibmpvHelper {
 
     func setRenderControlCallback(_ callback: @escaping mp_render_cb_control_fn, context object: AnyObject) {
         if mpvRenderContext == nil {
-            log.sendWarning("Init mpv render context first.")
+            log.warning("Init mpv render context first.")
         } else {
             mp_render_context_set_control_callback(mpvRenderContext, callback, TypeHelper.bridge(obj: object))
         }
@@ -93,18 +93,18 @@ class LibmpvHelper {
     }
 
     func isRenderUpdateFrame() -> Bool {
-        deinitLock.lock()
+        uninitLock.lock()
         if mpvRenderContext == nil {
-            deinitLock.unlock()
+            uninitLock.unlock()
             return false
         }
         let flags: UInt64 = mpv_render_context_update(mpvRenderContext)
-        deinitLock.unlock()
+        uninitLock.unlock()
         return flags & UInt64(MPV_RENDER_UPDATE_FRAME.rawValue) > 0
     }
 
     func drawRender(_ surface: NSSize, _ depth: GLint, _ ctx: CGLContextObj, skip: Bool = false) {
-        deinitLock.lock()
+        uninitLock.lock()
         if mpvRenderContext != nil {
             var i: GLint = 0
             let flip: CInt = 1
@@ -137,13 +137,13 @@ class LibmpvHelper {
 
         if !skip { CGLFlushDrawable(ctx) }
 
-        deinitLock.unlock()
+        uninitLock.unlock()
     }
 
     func setRenderICCProfile(_ profile: NSColorSpace) {
         if mpvRenderContext == nil { return }
         guard var iccData = profile.iccProfileData else {
-            log.sendWarning("Invalid ICC profile data.")
+            log.warning("Invalid ICC profile data.")
             return
         }
         iccData.withUnsafeMutableBytes { (ptr: UnsafeMutableRawBufferPointer) in
@@ -168,19 +168,14 @@ class LibmpvHelper {
         }
     }
 
-    func deinitRender() {
+    func uninit() {
         mpv_render_context_set_update_callback(mpvRenderContext, nil, nil)
         mp_render_context_set_control_callback(mpvRenderContext, nil, nil)
-        deinitLock.lock()
+        uninitLock.lock()
         mpv_render_context_free(mpvRenderContext)
         mpvRenderContext = nil
-        deinitLock.unlock()
-    }
-
-    func deinitMPV(_ destroy: Bool = false) {
-        if destroy {
-            mpv_destroy(mpvHandle)
-        }
-        mpvHandle = nil
+        mpv_destroy(mpv)
+        mpv = nil
+        uninitLock.unlock()
     }
 }
