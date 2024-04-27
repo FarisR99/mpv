@@ -44,6 +44,12 @@ static void mac_vk_swap_buffers(struct ra_ctx *ctx)
     [p->vo_mac swapBuffer];
 }
 
+static void mac_vk_get_vsync(struct ra_ctx *ctx, struct vo_vsync_info *info)
+{
+    struct priv *p = ctx->priv;
+    [p->vo_mac fillVsyncWithInfo:info];
+}
+
 static bool mac_vk_init(struct ra_ctx *ctx)
 {
     struct priv *p = ctx->priv = talloc_zero(ctx, struct priv);
@@ -66,6 +72,7 @@ static bool mac_vk_init(struct ra_ctx *ctx)
 
     struct ra_vk_ctx_params params = {
         .swap_buffers = mac_vk_swap_buffers,
+        .get_vsync = mac_vk_get_vsync,
     };
 
     VkInstance inst = vk->vkinst->instance;
@@ -121,6 +128,7 @@ static int mac_vk_control(struct ra_ctx *ctx, int *events, int request, void *ar
 const struct ra_ctx_fns ra_ctx_vulkan_mac = {
     .type           = "vulkan",
     .name           = "macvk",
+    .description    = "mac/Vulkan (via Metal)",
     .reconfig       = mac_vk_reconfig,
     .control        = mac_vk_control,
     .init           = mac_vk_init,

@@ -107,7 +107,9 @@ class InputHelper: NSObject {
             }
 
             guard let chars = event.characters, let charsNoMod = event.charactersIgnoringModifiers else { return false }
-            let key = (useAltGr() && event.modifierFlags.contains(.optionRight)) ? chars : charsNoMod
+            var key = (useAltGr() && event.modifierFlags.contains(.optionRight)) ? chars : charsNoMod
+            if key.isEmpty { key = mapDeadKey(event) }
+            if key.isEmpty { return false }
             key.withCString {
                 var bstr = bstr0($0)
                 putKey(bstr_decode_utf8(bstr, &bstr), modifiers: event.modifierFlags, type: event.type)
@@ -230,14 +232,34 @@ class InputHelper: NSObject {
         return Int32(buttonMapping[button] ?? SWIFT_MBTN9 + Int32(button - 5));
     }
 
-    @objc func open(files: [String]) {
+    func mapDeadKey(_ event: NSEvent) -> String {
+        let keyboard = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        let layoutPtr = TISGetInputSourceProperty(keyboard, kTISPropertyUnicodeKeyLayoutData)
+        let layoutData = unsafeBitCast(layoutPtr, to: CFData.self)
+        let layout = unsafeBitCast(CFDataGetBytePtr(layoutData), to: UnsafePointer<UCKeyboardLayout>.self)
+        let maxLength = 2
+        let modifiers: UInt32 = UInt32(event.modifierFlags.rawValue >> 16) & 0xff
+        var deadKeyState: UInt32 = 0
+        var length = 0
+        var chars = [UniChar](repeating: 0, count: maxLength)
+        let err = UCKeyTranslate(layout, event.keyCode, UInt16(kUCKeyActionDisplay), modifiers,
+                                 UInt32(LMGetKbdType()), 0, &deadKeyState, maxLength, &length, &chars)
+
+        if err != noErr || length < 1 { return "" }
+        return String(utf16CodeUnits: chars, count: length)
+    }
+
+    @objc func open(files: [String], append: Bool = false) {
         lock.withLock {
             guard let input = input else { return }
             if (option?.vo.drag_and_drop ?? -1) == -2 { return }
 
-            var action = NSEvent.modifierFlags.contains(.shift) ? DND_APPEND : DND_REPLACE
-            if (option?.vo.drag_and_drop ?? -1) >= 0  {
-                action = mp_dnd_action(UInt32(option?.vo.drag_and_drop ?? Int32(DND_REPLACE.rawValue)))
+            var action = DND_APPEND
+            if !append {
+                action = NSEvent.modifierFlags.contains(.shift) ? DND_APPEND : DND_REPLACE
+                if (option?.vo.drag_and_drop ?? -1) >= 0  {
+                    action = mp_dnd_action(UInt32(option?.vo.drag_and_drop ?? Int32(DND_REPLACE.rawValue)))
+                }
             }
 
             let filesClean = files.map{ $0.hasPrefix("file:///.file/id=") ? (URL(string: $0)?.path ?? $0) : $0 }

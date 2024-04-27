@@ -40,6 +40,7 @@
 #include "w32_common.h"
 #include "win32/displayconfig.h"
 #include "win32/droptarget.h"
+#include "win32/menu.h"
 #include "osdep/io.h"
 #include "osdep/threads.h"
 #include "osdep/w32_keyboard.h"
@@ -82,6 +83,8 @@ typedef enum MONITOR_DPI_TYPE {
 #define rect_w(r) ((r).right - (r).left)
 #define rect_h(r) ((r).bottom - (r).top)
 
+#define WM_SHOWMENU (WM_USER + 1)
+
 struct w32_api {
     HRESULT (WINAPI *pGetDpiForMonitor)(HMONITOR, MONITOR_DPI_TYPE, UINT*, UINT*);
     BOOL (WINAPI *pAdjustWindowRectExForDpi)(LPRECT lpRect, DWORD dwStyle, BOOL bMenu, DWORD dwExStyle, UINT dpi);
@@ -108,6 +111,8 @@ struct vo_w32_state {
     HWND parent; // 0 normally, set in embedding mode
     HHOOK parent_win_hook;
     HWINEVENTHOOK parent_evt_hook;
+
+    struct menu_ctx *menu_ctx;
 
     HMONITOR monitor; // Handle of the current screen
     char *color_profile; // Path of the current screen's color profile
@@ -949,6 +954,14 @@ static DWORD update_style(struct vo_w32_state *w32, DWORD style)
     return style;
 }
 
+static DWORD update_exstyle(struct vo_w32_state *w32, DWORD exstyle)
+{
+    exstyle &= ~(WS_EX_TOOLWINDOW);
+    if (!w32->opts->show_in_taskbar)
+        exstyle |= WS_EX_TOOLWINDOW;
+    return exstyle;
+}
+
 static void update_window_style(struct vo_w32_state *w32)
 {
     if (w32->parent)
@@ -958,7 +971,9 @@ static void update_window_style(struct vo_w32_state *w32)
     // has to be saved now and restored after setting the new style.
     const RECT wr = w32->windowrc;
     const DWORD style = GetWindowLongPtrW(w32->window, GWL_STYLE);
+    const DWORD exstyle = GetWindowLongPtrW(w32->window, GWL_EXSTYLE);
     SetWindowLongPtrW(w32->window, GWL_STYLE, update_style(w32, style));
+    SetWindowLongPtrW(w32->window, GWL_EXSTYLE, update_exstyle(w32, exstyle));
     w32->windowrc = wr;
 }
 
@@ -1486,6 +1501,14 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
         w32->window = NULL;
         PostQuitMessage(0);
         break;
+    case WM_COMMAND: {
+        const char *cmd = mp_win32_menu_get_cmd(w32->menu_ctx, LOWORD(wParam));
+        if (cmd) {
+            mp_cmd_t *cmdt = mp_input_parse_cmd(w32->input_ctx, bstr0(cmd), "");
+            mp_input_queue_cmd(w32->input_ctx, cmdt);
+        }
+        break;
+    }
     case WM_SYSCOMMAND:
         switch (wParam & 0xFFF0) {
         case SC_SCREENSAVE:
@@ -1686,6 +1709,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
             set_ime_conversion_mode(w32, IME_CMODE_ALPHANUMERIC);
             return 0;
         }
+        break;
+    case WM_SHOWMENU:
+        mp_win32_menu_show(w32->menu_ctx, w32->window);
         break;
     }
 
@@ -2060,6 +2086,7 @@ bool vo_w32_init(struct vo *vo)
         .dispatch = mp_dispatch_create(w32),
     };
     w32->opts = w32->opts_cache->opts;
+    w32->menu_ctx = mp_win32_menu_init();
     vo->w32 = w32;
 
     if (mp_thread_create(&w32->thread, gui_thread, w32))
@@ -2158,6 +2185,13 @@ static int gui_thread_control(struct vo_w32_state *w32, int request, void *arg)
                        changed_option == &vo_opts->title_bar)
             {
                 update_window_style(w32);
+                update_window_state(w32);
+            } else if (changed_option == &vo_opts->show_in_taskbar) {
+                // This hide and show is apparently required according to the documentation:
+                // https://learn.microsoft.com/en-us/windows/win32/shell/taskbar#managing-taskbar-buttons
+                ShowWindow(w32->window, SW_HIDE);
+                update_window_style(w32);
+                ShowWindow(w32->window, SW_SHOW);
                 update_window_state(w32);
             } else if (changed_option == &vo_opts->window_minimized) {
                 update_minimized_state(w32);
@@ -2272,6 +2306,12 @@ static int gui_thread_control(struct vo_w32_state *w32, int request, void *arg)
     case VOCTRL_BEGIN_DRAGGING:
         w32->start_dragging = true;
         return VO_TRUE;
+    case VOCTRL_SHOW_MENU:
+        PostMessageW(w32->window, WM_SHOWMENU, 0, 0);
+        return VO_TRUE;
+    case VOCTRL_UPDATE_MENU:
+        mp_win32_menu_update(w32->menu_ctx, (struct mpv_node *)arg);
+        return VO_TRUE;
     }
     return VO_NOTIMPL;
 }
@@ -2335,6 +2375,7 @@ void vo_w32_uninit(struct vo *vo)
 
     AvRevertMmThreadCharacteristics(w32->avrt_handle);
 
+    mp_win32_menu_uninit(w32->menu_ctx);
     talloc_free(w32);
     vo->w32 = NULL;
 }

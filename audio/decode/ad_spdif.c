@@ -79,7 +79,7 @@ static int write_packet(void *p, const uint8_t *buf, int buf_size)
 }
 
 // (called on both filter destruction _and_ if lavf fails to init)
-static void destroy(struct mp_filter *da)
+static void ad_spdif_destroy(struct mp_filter *da)
 {
     struct spdifContext *spdif_ctx = da->priv;
     AVFormatContext     *lavf_ctx  = spdif_ctx->lavf_ctx;
@@ -89,7 +89,7 @@ static void destroy(struct mp_filter *da)
             av_write_trailer(lavf_ctx);
         if (lavf_ctx->pb)
             av_freep(&lavf_ctx->pb->buffer);
-        av_freep(&lavf_ctx->pb);
+        avio_context_free(&lavf_ctx->pb);
         avformat_free_context(lavf_ctx);
         spdif_ctx->lavf_ctx = NULL;
     }
@@ -196,7 +196,8 @@ static int init_filter(struct mp_filter *da)
     if (!stream)
         goto fail;
 
-    stream->codecpar->codec_id = spdif_ctx->codec_id;
+    stream->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+    stream->codecpar->codec_id   = spdif_ctx->codec_id;
 
     AVDictionary *format_opts = NULL;
 
@@ -260,6 +261,8 @@ static int init_filter(struct mp_filter *da)
         abort();
     }
 
+    stream->codecpar->sample_rate = samplerate;
+
     struct mp_chmap chmap;
     mp_chmap_from_channels(&chmap, num_channels);
     mp_aframe_set_chmap(spdif_ctx->fmt, &chmap);
@@ -280,12 +283,12 @@ static int init_filter(struct mp_filter *da)
     return 0;
 
 fail:
-    destroy(da);
+    ad_spdif_destroy(da);
     mp_filter_internal_mark_failed(da);
     return -1;
 }
 
-static void process(struct mp_filter *da)
+static void ad_spdif_process(struct mp_filter *da)
 {
     struct spdifContext *spdif_ctx = da->priv;
 
@@ -410,8 +413,8 @@ struct mp_decoder_list *select_spdif_codec(const char *codec, const char *pref)
 static const struct mp_filter_info ad_spdif_filter = {
     .name = "ad_spdif",
     .priv_size = sizeof(struct spdifContext),
-    .process = process,
-    .destroy = destroy,
+    .process = ad_spdif_process,
+    .destroy = ad_spdif_destroy,
 };
 
 static struct mp_decoder *create(struct mp_filter *parent,

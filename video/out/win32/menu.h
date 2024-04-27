@@ -15,9 +15,18 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#import <Cocoa/Cocoa.h>
-#include "osdep/mac/application.h"
+#ifndef MP_WIN32_MENU_H
+#define MP_WIN32_MENU_H
 
-@interface Application : NSApplication
-@property(nonatomic, assign) size_t openCount;
-@end
+#include <windows.h>
+
+struct mpv_node;
+struct menu_ctx;
+
+struct menu_ctx *mp_win32_menu_init(void);
+void mp_win32_menu_uninit(struct menu_ctx *ctx);
+void mp_win32_menu_show(struct menu_ctx *ctx, HWND hwnd);
+void mp_win32_menu_update(struct menu_ctx *ctx, struct mpv_node *data);
+const char* mp_win32_menu_get_cmd(struct menu_ctx *ctx, UINT id);
+
+#endif

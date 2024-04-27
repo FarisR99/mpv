@@ -158,6 +158,8 @@ struct priv {
     // Performance data of last frame
     struct frame_info perf_fresh;
     struct frame_info perf_redraw;
+
+    struct mp_image_params target_params;
 };
 
 static void update_render_options(struct vo *vo);
@@ -1129,17 +1131,16 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
     pl_frames_infer_mix(p->rr, &mix, &target, &ref_frame);
 
     mp_mutex_lock(&vo->params_mutex);
-    if (!vo->target_params)
-        vo->target_params = talloc(vo, struct mp_image_params);
-    *vo->target_params = (struct mp_image_params){
+    p->target_params = (struct mp_image_params){
         .imgfmt_name = swframe.fbo->params.format
                         ? swframe.fbo->params.format->name : NULL,
-        .w = swframe.fbo->params.w,
-        .h = swframe.fbo->params.h,
+        .w = mp_rect_w(p->dst),
+        .h = mp_rect_h(p->dst),
         .color = target.color,
         .repr = target.repr,
         .rotate = target.rotation,
     };
+    vo->target_params = &p->target_params;
 
     if (vo->params) {
         vo->params->color.hdr = ref_frame.color.hdr;
@@ -1231,7 +1232,9 @@ static int reconfig(struct vo *vo, struct mp_image_params *params)
         return -1;
 
     resize(vo);
-    TA_FREEP(&vo->target_params);
+    mp_mutex_lock(&vo->params_mutex);
+    vo->target_params = NULL;
+    mp_mutex_unlock(&vo->params_mutex);
     return 0;
 }
 
@@ -1633,9 +1636,6 @@ done:
 
 static void cache_save_obj(void *p, pl_cache_obj obj)
 {
-    if (!obj.data || !obj.size)
-        return;
-
     const struct cache *c = p;
     void *ta_ctx = talloc_new(NULL);
 
@@ -1645,6 +1645,11 @@ static void cache_save_obj(void *p, pl_cache_obj obj)
     char *filepath = cache_filepath(ta_ctx, c->dir, c->name, obj.key);
     if (!filepath)
         goto done;
+
+    if (!obj.data || !obj.size) {
+        unlink(filepath);
+        goto done;
+    }
 
     // Don't save if already exists
     if (!stat(filepath, &(struct stat){0})) {

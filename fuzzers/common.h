@@ -17,5 +17,26 @@
 
 #pragma once
 
-// multithreaded wrapper for mpv_main
-int cocoa_main(int argc, char *argv[]);
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MPV_STRINGIFY_(X) #X
+#define MPV_STRINGIFY(X) MPV_STRINGIFY_(X)
+
+static inline void check_error(int status)
+{
+    if (status < 0) {
+        fprintf(stderr, "mpv API error: %s\n", mpv_error_string(status));
+        exit(1);
+    }
+}
+
+static inline bool str_startswith(const char *str, size_t str_len,
+                                  const char *prefix, size_t prefix_len)
+{
+    if (str_len < prefix_len)
+        return false;
+    return !memcmp(str, prefix, prefix_len);
+}

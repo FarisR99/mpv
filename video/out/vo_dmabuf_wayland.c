@@ -494,9 +494,9 @@ static void set_viewport_source(struct vo *vo, struct mp_rect src)
         return;
 
     if (!mp_rect_equals(&p->src, &src)) {
-        wp_viewport_set_source(wl->video_viewport, src.x0 << 8,
-                               src.y0 << 8, mp_rect_w(src) << 8,
-                               mp_rect_h(src) << 8);
+        wp_viewport_set_source(wl->video_viewport, wl_fixed_from_int(src.x0),
+                               wl_fixed_from_int(src.y0), wl_fixed_from_int(mp_rect_w(src)),
+                               wl_fixed_from_int(mp_rect_h(src)));
         p->src = src;
     }
 }
@@ -537,10 +537,10 @@ static void resize(struct vo *vo)
     vo_get_src_dst_rects(vo, &src, &dst, &p->screen_osd_res);
     wp_viewport_set_destination(wl->video_viewport, lround(mp_rect_w(dst) / wl->scaling),
                                                     lround(mp_rect_h(dst) / wl->scaling));
-    wl_subsurface_set_position(wl->video_subsurface, dst.x0, dst.y0);
+    wl_subsurface_set_position(wl->video_subsurface, lround(dst.x0 / wl->scaling), lround(dst.y0 / wl->scaling));
     wp_viewport_set_destination(wl->osd_viewport, lround(vo->dwidth / wl->scaling),
                                                   lround(vo->dheight / wl->scaling));
-    wl_subsurface_set_position(wl->osd_subsurface, 0 - dst.x0, 0 - dst.y0);
+    wl_subsurface_set_position(wl->osd_subsurface, lround((0 - dst.x0) / wl->scaling), lround((0 - dst.y0) / wl->scaling));
     set_viewport_source(vo, src);
 }
 
@@ -695,10 +695,7 @@ done:
     if (!vo_wayland_reconfig(vo))
         return VO_ERROR;
 
-    // mpv rotates clockwise but the wayland spec has counter-clockwise rotations
-    // swap 1 and 3 to match mpv's direction
-    int transform = (360 - img->params.rotate) % 360 / 90;
-    wl_surface_set_buffer_transform(vo->wl->video_surface, transform);
+    wl_surface_set_buffer_transform(vo->wl->video_surface, img->params.rotate / 90);
 
     // Immediately destroy all buffers if params change.
     destroy_buffers(vo);

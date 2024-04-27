@@ -150,14 +150,32 @@ exit_label:
     return false;
 }
 
+static void thread_pause(struct ao *ao)
+{
+    struct wasapi_state *state = ao->priv;
+    MP_DBG(state, "Thread Pause\n");
+    HRESULT hr = IAudioClient_Stop(state->pAudioClient);
+    if (FAILED(hr))
+        MP_ERR(state, "IAudioClient_Stop returned: %s\n", mp_HRESULT_to_str(hr));
+}
+
+static void thread_unpause(struct ao *ao)
+{
+    struct wasapi_state *state = ao->priv;
+    MP_DBG(state, "Thread Unpause\n");
+    HRESULT hr = IAudioClient_Start(state->pAudioClient);
+    if (FAILED(hr)) {
+        MP_ERR(state, "IAudioClient_Start returned %s\n",
+               mp_HRESULT_to_str(hr));
+    }
+}
+
 static void thread_reset(struct ao *ao)
 {
     struct wasapi_state *state = ao->priv;
     HRESULT hr;
     MP_DBG(state, "Thread Reset\n");
-    hr = IAudioClient_Stop(state->pAudioClient);
-    if (FAILED(hr))
-        MP_ERR(state, "IAudioClient_Stop returned: %s\n", mp_HRESULT_to_str(hr));
+    thread_pause(ao);
 
     hr = IAudioClient_Reset(state->pAudioClient);
     if (FAILED(hr))
@@ -172,25 +190,22 @@ static void thread_resume(struct ao *ao)
     MP_DBG(state, "Thread Resume\n");
     thread_reset(ao);
     thread_feed(ao);
-
-    HRESULT hr = IAudioClient_Start(state->pAudioClient);
-    if (FAILED(hr)) {
-        MP_ERR(state, "IAudioClient_Start returned %s\n",
-               mp_HRESULT_to_str(hr));
-    }
+    thread_unpause(ao);
 }
 
-static void set_state_and_wakeup_thread(struct ao *ao,
-                                        enum wasapi_thread_state thread_state)
+static void thread_wakeup(void *ptr)
+{
+    struct ao *ao = ptr;
+    struct wasapi_state *state = ao->priv;
+    SetEvent(state->hUserWake);
+}
+
+static void set_thread_state(struct ao *ao,
+                             enum wasapi_thread_state thread_state)
 {
     struct wasapi_state *state = ao->priv;
     atomic_store(&state->thread_state, thread_state);
-    SetEvent(state->hWake);
-}
-
-static void thread_process_dispatch(void *ptr)
-{
-    set_state_and_wakeup_thread(ptr, WASAPI_THREAD_DISPATCH);
+    thread_wakeup(ao);
 }
 
 static DWORD __stdcall AudioThread(void *lpParameter)
@@ -207,18 +222,25 @@ static DWORD __stdcall AudioThread(void *lpParameter)
 
     MP_DBG(ao, "Entering dispatch loop\n");
     while (true) {
-        if (WaitForSingleObject(state->hWake, INFINITE) != WAIT_OBJECT_0)
-            MP_ERR(ao, "Unexpected return value from WaitForSingleObject\n");
+        HANDLE handles[] = {state->hWake, state->hUserWake};
+        switch (WaitForMultipleObjects(MP_ARRAY_SIZE(handles), handles, FALSE, INFINITE)) {
+        case WAIT_OBJECT_0:
+            // fill twice on under-full buffer (see comment in thread_feed)
+            if (thread_feed(ao) && thread_feed(ao))
+                MP_ERR(ao, "Unable to fill buffer fast enough\n");
+            continue;
+        case WAIT_OBJECT_0 + 1:
+            break;
+        default:
+            MP_ERR(ao, "Unexpected return value from WaitForMultipleObjects\n");
+            break;
+        }
+
+        mp_dispatch_queue_process(state->dispatch, 0);
 
         int thread_state = atomic_load(&state->thread_state);
         switch (thread_state) {
         case WASAPI_THREAD_FEED:
-            // fill twice on under-full buffer (see comment in thread_feed)
-            if (thread_feed(ao) && thread_feed(ao))
-                MP_ERR(ao, "Unable to fill buffer fast enough\n");
-            break;
-        case WASAPI_THREAD_DISPATCH:
-            mp_dispatch_queue_process(state->dispatch, 0);
             break;
         case WASAPI_THREAD_RESET:
             thread_reset(ao);
@@ -229,6 +251,12 @@ static DWORD __stdcall AudioThread(void *lpParameter)
         case WASAPI_THREAD_SHUTDOWN:
             thread_reset(ao);
             goto exit_label;
+        case WASAPI_THREAD_PAUSE:
+            thread_pause(ao);
+            break;
+        case WASAPI_THREAD_UNPAUSE:
+            thread_unpause(ao);
+            break;
         default:
             MP_ERR(ao, "Unhandled thread state: %d\n", thread_state);
         }
@@ -248,8 +276,8 @@ static void uninit(struct ao *ao)
 {
     MP_DBG(ao, "Uninit wasapi\n");
     struct wasapi_state *state = ao->priv;
-    if (state->hWake)
-        set_state_and_wakeup_thread(ao, WASAPI_THREAD_SHUTDOWN);
+    if (state->hWake && state->hUserWake)
+        set_thread_state(ao, WASAPI_THREAD_SHUTDOWN);
 
     if (state->hAudioThread &&
         WaitForSingleObject(state->hAudioThread, INFINITE) != WAIT_OBJECT_0)
@@ -260,6 +288,7 @@ static void uninit(struct ao *ao)
 
     SAFE_DESTROY(state->hInitDone,   CloseHandle(state->hInitDone));
     SAFE_DESTROY(state->hWake,       CloseHandle(state->hWake));
+    SAFE_DESTROY(state->hUserWake,   CloseHandle(state->hUserWake));
     SAFE_DESTROY(state->hAudioThread,CloseHandle(state->hAudioThread));
 
     wasapi_change_uninit(ao);
@@ -293,14 +322,15 @@ static int init(struct ao *ao)
 
     state->hInitDone = CreateEventW(NULL, FALSE, FALSE, NULL);
     state->hWake     = CreateEventW(NULL, FALSE, FALSE, NULL);
-    if (!state->hInitDone || !state->hWake) {
+    state->hUserWake = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (!state->hInitDone || !state->hWake || !state->hUserWake) {
         MP_FATAL(ao, "Error creating events\n");
         uninit(ao);
         return -1;
     }
 
     state->dispatch = mp_dispatch_create(state);
-    mp_dispatch_set_wakeup_fn(state->dispatch, thread_process_dispatch, ao);
+    mp_dispatch_set_wakeup_fn(state->dispatch, thread_wakeup, ao);
 
     state->init_ok = false;
     state->hAudioThread = CreateThread(NULL, 0, &AudioThread, ao, 0, NULL);
@@ -455,12 +485,18 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
 
 static void audio_reset(struct ao *ao)
 {
-    set_state_and_wakeup_thread(ao, WASAPI_THREAD_RESET);
+    set_thread_state(ao, WASAPI_THREAD_RESET);
 }
 
 static void audio_resume(struct ao *ao)
 {
-    set_state_and_wakeup_thread(ao, WASAPI_THREAD_RESUME);
+    set_thread_state(ao, WASAPI_THREAD_RESUME);
+}
+
+static bool audio_set_pause(struct ao *ao, bool paused)
+{
+    set_thread_state(ao, paused ? WASAPI_THREAD_PAUSE : WASAPI_THREAD_UNPAUSE);
+    return true;
 }
 
 static void hotplug_uninit(struct ao *ao)
@@ -496,8 +532,15 @@ const struct ao_driver audio_out_wasapi = {
     .control        = control,
     .reset          = audio_reset,
     .start          = audio_resume,
+    .set_pause      = audio_set_pause,
     .list_devs      = wasapi_list_devs,
     .hotplug_init   = hotplug_init,
     .hotplug_uninit = hotplug_uninit,
     .priv_size      = sizeof(wasapi_state),
+    .options_prefix = "wasapi",
+    .options        = (const struct m_option[]) {
+        {"exclusive-buffer", OPT_CHOICE(opt_exclusive_buffer,
+            {"default", 0}, {"min", -1}), M_RANGE(1, 2000000)},
+        {0}
+    },
 };

@@ -22,10 +22,9 @@
 #include "options/m_config.h"
 #include "options/m_option.h"
 #include "options/options.h"
+#include "video/filter/vf_gpu.h"
 #include "video/out/aspect.h"
 #include "video/out/gpu/video.h"
-#include "video/out/vulkan/context.h"
-#include "video/filter/vf_gpu.h"
 
 extern const struct offscreen_context offscreen_vk;
 extern const struct offscreen_context offscreen_egl;
@@ -34,11 +33,11 @@ static const struct offscreen_context *contexts[] = {
 #if HAVE_EGL
     &offscreen_egl,
 #endif
+#if HAVE_VULKAN
     &offscreen_vk,
+#endif
 };
 
-// static int offscreen_ctx_validate_api(struct mp_log *log, const struct m_option *opt,
-//                                       struct bstr name, const char **value)
 static inline OPT_STRING_VALIDATE_FUNC(offscreen_ctx_validate_api)
 {
     struct bstr param = bstr0(*value);
@@ -50,7 +49,7 @@ static inline OPT_STRING_VALIDATE_FUNC(offscreen_ctx_validate_api)
 }
 
 static int offscreen_ctx_api_help(struct mp_log *log, const struct m_option *opt,
-                           struct bstr name)
+                                  struct bstr name)
 {
     mp_info(log, "GPU APIs (offscreen contexts):\n");
     for (int i = 0; i < MP_ARRAY_SIZE(contexts); i++)
@@ -60,13 +59,13 @@ static int offscreen_ctx_api_help(struct mp_log *log, const struct m_option *opt
 
 static struct offscreen_ctx *offscreen_ctx_create(struct mpv_global *global,
                                                   struct mp_log *log,
-                                                  const char *api,
-                                                  const char *device) {
+                                                  const char *api)
+{
     for (int i = 0; i < MP_ARRAY_SIZE(contexts); i++) {
         if (api && strcmp(contexts[i]->api, api) != 0)
             continue;
         mp_info(log, "Creating offscreen GPU context '%s'\n", contexts[i]->api);
-        return contexts[i]->offscreen_ctx_create(global, log, device);
+        return contexts[i]->offscreen_ctx_create(global, log);
     }
     return NULL;
 }
@@ -283,14 +282,8 @@ static struct mp_filter *gpu_create(struct mp_filter *parent, void *options)
     priv->opts = talloc_steal(priv, options);
     priv->vo_opts_cache = m_config_cache_alloc(f, f->global, &vo_sub_opts);
     priv->vo_opts = priv->vo_opts_cache->opts;
-    #if HAVE_VULKAN
-    const struct m_config_cache *vulkan_opts_cache = m_config_cache_alloc(f, f->global, &vulkan_conf);
-    const struct vulkan_opts *opts_vulkan = vulkan_opts_cache->opts;
-    const char* device_name = opts_vulkan->device;
-    #else
-    const char* device_name = NULL;
-    #endif
-    priv->ctx = offscreen_ctx_create(f->global, f->log, priv->opts->api, device_name);
+
+    priv->ctx = offscreen_ctx_create(f->global, f->log, priv->opts->api);
     if (!priv->ctx) {
         MP_FATAL(f, "Could not create offscreen ra context.\n");
         goto error;

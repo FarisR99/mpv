@@ -387,7 +387,7 @@ class Common: NSObject {
 
     func getScreenBy(name screenName: String?) -> NSScreen? {
         for screen in NSScreen.screens {
-            if screen.localizedName == screenName {
+            if [screen.localizedName, screen.name, screen.uniqueName, screen.serialNumber].contains(screenName) {
                 return screen
             }
         }
@@ -601,10 +601,8 @@ class Common: NSObject {
         case VOCTRL_GET_UNFS_WINDOW_SIZE:
             let sizeData = data!.assumingMemoryBound(to: Int32.self)
             let size = UnsafeMutableBufferPointer(start: sizeData, count: 2)
-            var rect = window?.unfsContentFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 720)
-            if let screen = window?.currentScreen, !Bool(option.vo.hidpi_window_scale) {
-                rect = screen.convertRectToBacking(rect)
-            }
+            let rect = (Bool(option.vo.hidpi_window_scale) ? window?.unfsContentFrame
+                : window?.unfsContentFramePixel) ?? NSRect(x: 0, y: 0, width: 1280, height: 720)
 
             size[0] = Int32(rect.size.width)
             size[1] = Int32(rect.size.height)
@@ -624,7 +622,7 @@ class Common: NSObject {
             let dnames = data!.assumingMemoryBound(to: UnsafeMutablePointer<UnsafeMutablePointer<Int8>?>?.self)
             var array: UnsafeMutablePointer<UnsafeMutablePointer<Int8>?>? = nil
             var count: Int32 = 0
-            let displayName = getCurrentScreen()?.localizedName ?? "Unknown"
+            let displayName = getCurrentScreen()?.uniqueName ?? "Unknown"
 
             app_bridge_tarray_append(nil, &array, &count, ta_xstrdup(nil, displayName))
             app_bridge_tarray_append(nil, &array, &count, nil)

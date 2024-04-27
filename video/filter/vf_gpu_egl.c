@@ -47,10 +47,9 @@ static void gl_ctx_set_context(struct offscreen_ctx *ctx, bool enable)
 }
 
 static struct offscreen_ctx *gl_offscreen_ctx_create(struct mpv_global *global,
-                                                     struct mp_log *log,
-                                                     const char *device)
+                                                     struct mp_log *log)
 {
-    struct offscreen_ctx *ctx = talloc_zero(NULL, struct offscreen_ctx);
+    struct offscreen_ctx *ctx = talloc(NULL, struct offscreen_ctx);
     struct gl_offscreen_ctx *gl = talloc_zero(ctx, struct gl_offscreen_ctx);
     talloc_set_destructor(ctx, gl_ctx_destroy);
     *ctx = (struct offscreen_ctx){
@@ -106,4 +105,3 @@ const struct offscreen_context offscreen_egl = {
     .api = "egl",
     .offscreen_ctx_create = gl_offscreen_ctx_create
 };
-

@@ -49,8 +49,8 @@ input.conf syntax
 ``[Shift+][Ctrl+][Alt+][Meta+]<key> [{<section>}] <command> ( ; <command> )*``
 
 Note that by default, the right Alt key can be used to create special
-characters, and thus does not register as a modifier. The option
-``--no-input-right-alt-gr`` changes this behavior.
+characters, and thus does not register as a modifier. This can be changed
+with ``--input-right-alt-gr`` option.
 
 Newlines always start a new binding. ``#`` starts a comment (outside of quoted
 string arguments). To bind commands to the ``#`` key, ``SHARP`` can be used.
@@ -264,7 +264,7 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
 ``ignore``
     Use this to "block" keys that should be unbound, and do nothing. Useful for
     disabling default bindings, without disabling all bindings with
-    ``--no-input-default-bindings``.
+    ``--input-default-bindings=no``.
 
 ``seek <target> [<flags>]``
     Change the playback position. By default, seeks by a relative amount of
@@ -926,6 +926,9 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
 
     <keep-selection>
         Do not change current track selections.
+
+``context-menu``
+    Show context menu on the video window. See `Context Menu`_ section for details.
 
 
 Input Commands that are Possibly Subject to Change
@@ -2398,12 +2401,6 @@ Property list
     Similar to ``ao-volume``, but controls the mute state. May be unimplemented
     even if ``ao-volume`` works.
 
-``audio-codec``
-    Audio codec selected for decoding.
-
-``audio-codec-name``
-    Audio codec.
-
 ``audio-params``
     Audio format as output by the audio decoder.
     This has a number of sub-properties:
@@ -2486,12 +2483,6 @@ Property list
     This does not necessarily use the same values as ``hwdec``. There can be
     multiple interop drivers for the same hardware decoder, depending on
     platform and VO.
-
-``video-format``
-    Video format as string.
-
-``video-codec``
-    Video codec selected for decoding.
 
 ``width``, ``height``
     Video size. This uses the size of the video as decoded, or if no video
@@ -2699,30 +2690,6 @@ Property list
     enabled, or after precise seeking). Files with imprecise timestamps (such
     as Matroska) might lead to unstable results.
 
-``window-scale`` (RW)
-    Window size multiplier. Setting this will resize the video window to the
-    values contained in ``dwidth`` and ``dheight`` multiplied with the value
-    set with this property. Setting ``1`` will resize to original video size
-    (or to be exact, the size the video filters output). ``2`` will set the
-    double size, ``0.5`` halves the size.
-
-    Note that setting a value identical to its previous value will not resize
-    the window. That's because this property mirrors the ``window-scale``
-    option, and setting an option to its previous value is ignored. If this
-    value is set while the window is in a fullscreen, the multiplier is not
-    applied until the window is taken out of that state. Writing this property
-    to a maximized window can unmaximize the window depending on the OS and
-    window manager. If the window does not unmaximize, the multiplier will be
-    applied if the user unmaximizes the window later.
-
-    See ``current-window-scale`` for the value derived from the actual window
-    size.
-
-    Since mpv 0.31.0, this always returns the previously set value (or the
-    default value), instead of the value implied by the actual window size.
-    Before mpv 0.31.0, this returned what ``current-window-scale`` returns now,
-    after the window was created.
-
 ``current-window-scale`` (RW)
     The ``window-scale`` value calculated from the current window size. This
     has the same value as ``window-scale`` if the window size was not changed
@@ -2731,10 +2698,9 @@ Property list
     calculated from the last non-fullscreen size of the window. The property
     is unavailable if no video is active.
 
-    When setting this property in the fullscreen or maximized state, the behavior
-    is the same as window-scale. In all other cases, setting the value of this
-    property will always resize the window. This does not affect the value of
-    ``window-scale``.
+    It is also possible to write to this property. This has the same behavior as
+    writing ``window-scale``. Note that writing to ``current-window-scale`` will
+    not affect the value of ``window-scale``.
 
 ``focused``
     Whether the window has focus. Might not be supported by all VOs.
@@ -2745,11 +2711,11 @@ Property list
     are the GDI names (\\.\DISPLAY1, \\.\DISPLAY2, etc.) and the first display
     in the list will be the one that Windows considers associated with the
     window (as determined by the MonitorFromWindow API.) On macOS these are the
-    Display Product Names as used in the System Information and only one display
-    name is returned since a window can only be on one screen. On Wayland, these
-    are the wl_output names if protocol version >= 4 is used
-    (LVDS-1, HDMI-A-1, X11-1, etc.), or the wl_output model reported by the
-    geometry event if protocol version < 4 is used.
+    Display Product Names as used in the System Information with a serial number
+    in brackets and only one display name is returned since a window can only be
+    on one screen. On Wayland, these are the wl_output names if protocol
+    version >= 4 is used (LVDS-1, HDMI-A-1, X11-1, etc.), or the wl_output model
+    reported by the geometry event if protocol version < 4 is used.
 
 ``display-fps``
     The refresh rate of the current display. Currently, this is the lowest FPS
@@ -2857,24 +2823,37 @@ Property list
     stripped. If the subtitle is not text-based (i.e. DVD/BD subtitles), an
     empty string is returned.
 
-``sub-text-ass``
-    Like ``sub-text``, but return the text in ASS format. Text subtitles in
-    other formats are converted. For native ASS subtitles, events that do
-    not contain any text (but vector drawings etc.) are not filtered out. If
-    multiple events match with the current playback time, they are concatenated
-    with line breaks. Contains only the "Text" part of the events.
+    This has sub-properties for different formats:
 
-    This property is not enough to render ASS subtitles correctly, because ASS
-    header and per-event metadata are not returned. You likely need to do
-    further filtering on the returned string to make it useful.
+    ``sub-text/ass``
+        Like ``sub-text``, but return the text in ASS format. Text subtitles in
+        other formats are converted. For native ASS subtitles, events that do
+        not contain any text (but vector drawings etc.) are not filtered out. If
+        multiple events match with the current playback time, they are concatenated
+        with line breaks. Contains only the "Text" part of the events.
+
+        This property is not enough to render ASS subtitles correctly, because ASS
+        header and per-event metadata are not returned. Use ``/ass-full`` for that.
+
+    ``sub-text/ass-full``
+        Like ``sub-text-ass``, but return the full event with all fields, formatted as
+        lines in a .ass text file. Use with ``sub-ass-extradata`` for style information.
+
+``sub-text-ass`` (deprecated)
+    Deprecated alias for ``sub-text/ass``.
 
 ``secondary-sub-text``
-    Same as ``sub-text``, but for the secondary subtitles.
+    Same as ``sub-text`` (with the same sub-properties), but for the secondary subtitles.
 
 ``sub-start``
     The current subtitle start time (in seconds). If there's multiple current
     subtitles, returns the first start time. If no current subtitle is present
     null is returned instead.
+
+    This has a sub-property:
+
+    ``sub-start/full``
+        ``sub-start`` with milliseconds.
 
 ``secondary-sub-start``
     Same as ``sub-start``, but for the secondary subtitles.
@@ -2884,6 +2863,11 @@ Property list
     subtitles, return the last end time. If no current subtitle is present, or
     if it's present but has unknown or incorrect duration, null is returned
     instead.
+
+    This has a sub-property:
+
+    ``sub-end/full``
+        ``sub-end`` with milliseconds.
 
 ``secondary-sub-end``
     Same as ``sub-end``, but for the secondary subtitles.
@@ -2975,7 +2959,7 @@ Property list
         Name of the Nth entry. Available if the playlist file contains
         such fields and mpv's parser supports it for the given
         playlist format, or if the playlist entry has been opened before and a
-        media-title other then then filename has been acquired.
+        media-title other than filename has been acquired.
 
     ``playlist/N/id``
         Unique ID for this entry. This is an automatically assigned integer ID
@@ -3054,6 +3038,13 @@ Property list
         The codec name used by this track, for example ``h264``. Unavailable
         in some rare cases.
 
+    ``track-list/N/codec-desc``
+        The codec descriptive name used by this track.
+
+    ``track-list/N/codec-profile``
+        The codec profile used by this track. Available only if the track has
+        been already decoded.
+
     ``track-list/N/external``
         ``yes``/true if the track is an external file, ``no``/false or
         unavailable otherwise. This is set for separate subtitle files.
@@ -3078,6 +3069,9 @@ Property list
         (``--demuxer=lavf``) is used. For mkv files, the index will usually
         match even if the default (builtin) demuxer is used, but there is
         no hard guarantee.
+
+    ``track-list/N/decoder``
+        If this track is being decoded, the short decoder name,
 
     ``track-list/N/decoder-desc``
         If this track is being decoded, the human-readable decoder name,
@@ -3154,6 +3148,8 @@ Property list
                 "external"          MPV_FORMAT_FLAG
                 "external-filename" MPV_FORMAT_STRING
                 "codec"             MPV_FORMAT_STRING
+                "codec-desc"        MPV_FORMAT_STRING
+                "codec-profile"     MPV_FORMAT_STRING
                 "ff-index"          MPV_FORMAT_INT64
                 "decoder-desc"      MPV_FORMAT_STRING
                 "demux-w"           MPV_FORMAT_INT64
@@ -3453,6 +3449,48 @@ Property list
     representation. If converting a leaf-level object (i.e. not a map or array)
     and not using raw mode, the underlying content will be given (e.g. strings will be
     printed directly, rather than quoted and JSON-escaped).
+
+``menu-data`` (RW)
+    This property stores the raw menu definition. See `Context Menu`_ section for details.
+
+    ``type``
+        Menu item type. Can be: ``separator``, ``submenu``, or empty.
+
+    ``title``
+        Menu item title. Required if type is not ``separator``.
+
+    ``cmd``
+        Command to execute when the menu item is clicked.
+
+    ``shortcut``
+        Menu item shortcut key which appears to the right of the menu item.
+        A shortcut key does not have to be functional; it's just a visual hint.
+
+    ``state``
+        Menu item state. Can be: ``checked``, ``disabled``, ``hidden``, or empty.
+
+    ``submenu``
+        Submenu items, which is required if type is ``submenu``.
+
+    When querying the property with the client API using ``MPV_FORMAT_NODE``, or with
+    Lua ``mp.get_property_native``, this will return a mpv_node with the following
+    contents:
+
+    ::
+
+        MPV_FORMAT_NODE_ARRAY
+            MPV_FORMAT_NODE_MAP (menu item)
+                "type"           MPV_FORMAT_STRING
+                "title"          MPV_FORMAT_STRING
+                "cmd"            MPV_FORMAT_STRING
+                "shortcut"       MPV_FORMAT_STRING
+                "state"          MPV_FORMAT_NODE_ARRAY[MPV_FORMAT_STRING]
+                "submenu"        MPV_FORMAT_NODE_ARRAY[menu item]
+
+    Writing to this property with the client API using ``MPV_FORMAT_NODE`` or with
+    Lua ``mp.set_property_native`` will trigger an immediate update of the menu if
+    mpv video output is currently active. You may observe the ``current-vo``
+    property to check if this is the case.
 
 ``working-directory``
     The working directory of the mpv process. Can be useful for JSON IPC users,

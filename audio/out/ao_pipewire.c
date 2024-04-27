@@ -47,6 +47,15 @@ static inline int pw_stream_get_time_n(struct pw_stream *stream, struct pw_time 
 #define spa_hook_remove(hook) if ((hook)->link.prev) spa_hook_remove(hook)
 #endif
 
+#if !PW_CHECK_VERSION(1, 0, 4)
+static uint64_t pw_stream_get_nsec(struct pw_stream *stream)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return SPA_TIMESPEC_TO_NSEC(&ts);
+}
+#endif
+
 enum init_state {
     INIT_STATE_NONE,
     INIT_STATE_SUCCESS,
@@ -189,9 +198,13 @@ static void on_process(void *userdata)
         time.rate.num = 1;
 
     int64_t end_time = mp_time_ns();
-    /* time.queued is always going to be 0, so we don't need to care */
-    end_time += (nframes * 1e9 / ao->samplerate) +
-                ((double) time.delay * SPA_NSEC_PER_SEC * time.rate.num / time.rate.denom);
+    end_time += MP_TIME_S_TO_NS(nframes) / ao->samplerate;
+    end_time += MP_TIME_S_TO_NS(time.delay) * time.rate.num / time.rate.denom;
+    end_time += MP_TIME_S_TO_NS(time.queued) / ao->samplerate;
+#if PW_CHECK_VERSION(0, 3, 50)
+    end_time += MP_TIME_S_TO_NS(time.buffered) / ao->samplerate;
+#endif
+    end_time -= pw_stream_get_nsec(p->stream) - time.now;
 
     int samples = ao_read_data_nonblocking(ao, data, nframes, end_time);
     b->size = samples;
@@ -693,6 +706,15 @@ static void start(struct ao *ao)
     pw_thread_loop_unlock(p->loop);
 }
 
+static bool set_pause(struct ao *ao, bool paused)
+{
+    struct priv *p = ao->priv;
+    pw_thread_loop_lock(p->loop);
+    pw_stream_set_active(p->stream, !paused);
+    pw_thread_loop_unlock(p->loop);
+    return true;
+}
+
 #define CONTROL_RET(r) (!r ? CONTROL_OK : CONTROL_ERROR)
 
 static int control(struct ao *ao, enum aocontrol cmd, void *arg)
@@ -884,7 +906,7 @@ const struct ao_driver audio_out_pipewire = {
     .uninit      = uninit,
     .reset       = reset,
     .start       = start,
-
+    .set_pause   = set_pause,
     .control     = control,
 
     .hotplug_init   = hotplug_init,

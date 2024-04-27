@@ -379,6 +379,15 @@ pthread_debug = get_option('pthread-debug').require(
 )
 features += {'pthread-debug': pthread_debug.allowed()}
 
+if get_option('fuzzers')
+    if get_option('cplayer') or not get_option('libmpv')
+        error('fuzzers require !cplayer and libmpv')
+    endif
+    # Adding flags manually until https://github.com/mesonbuild/meson/pull/9825
+    flags += ['-fsanitize=address,undefined,fuzzer', '-fno-omit-frame-pointer']
+    link_flags += ['-fsanitize=address,undefined,fuzzer', '-fno-omit-frame-pointer']
+endif
+
 add_project_arguments(flags, language: 'c')
 add_project_arguments(['-Wno-unused-parameter'], language: 'objc')
 add_project_link_arguments(link_flags, language: ['c', 'objc'])
@@ -393,7 +402,6 @@ if features['cocoa']
     sources += files('osdep/language-mac.c',
                      'osdep/path-mac.m',
                      'osdep/utils-mac.c',
-                     'osdep/mac/application.m',
                      'osdep/mac/app_bridge.m')
     main_fn_source = files('osdep/main-fn-mac.c')
 endif
@@ -504,7 +512,8 @@ if features['win32-desktop']
                      'osdep/terminal-win.c',
                      'video/out/w32_common.c',
                      'video/out/win32/displayconfig.c',
-                     'video/out/win32/droptarget.c')
+                     'video/out/win32/droptarget.c',
+                     'video/out/win32/menu.c')
     main_fn_source = files('osdep/main-fn-win.c')
 endif
 
@@ -819,8 +828,11 @@ endif
 
 if features['audiounit'] or features['coreaudio'] or features['avfoundation']
     sources += files('audio/out/ao_coreaudio_chmap.c',
-                     'audio/out/ao_coreaudio_utils.c',
-                     'audio/out/ao_coreaudio_properties.c')
+                     'audio/out/ao_coreaudio_utils.c')
+endif
+
+if features['avfoundation']
+    sources += files('audio/out/ao_coreaudio_properties.c')
 endif
 
 jack_opt = get_option('jack').require(
@@ -994,6 +1006,8 @@ features += {'d3d11': d3d11.allowed()}
 if features['d3d11']
     sources += files('video/out/d3d11/context.c',
                      'video/out/d3d11/ra_d3d11.c')
+    features += {'dxgi-debug-d3d11': cc.has_header_symbol('d3d11sdklayers.h', 'DXGI_DEBUG_D3D11')}
+    features += {'dxgi-debug': cc.has_header_symbol('dxgidebug.h', 'IID_IDXGIInfoQueue')}
 endif
 
 wayland = {
@@ -1304,7 +1318,7 @@ if features['vk-khr-display']
     sources += files('video/out/vulkan/context_display.c')
 endif
 
-if features['vulkan'] or (features['egl'] and features['egl-helpers'])
+if features['vulkan'] or (features['gl'] and features['egl'])
     sources += files('video/filter/vf_gpu.c')
 endif
 
@@ -1545,7 +1559,8 @@ features += {'swift': swift.allowed()}
 
 swift_sources = []
 if features['cocoa'] and features['swift']
-    swift_sources += files('osdep/mac/app_hub.swift',
+    swift_sources += files('osdep/mac/application.swift',
+                           'osdep/mac/app_hub.swift',
                            'osdep/mac/event_helper.swift',
                            'osdep/mac/input_helper.swift',
                            'osdep/mac/libmpv_helper.swift',
@@ -1553,6 +1568,7 @@ if features['cocoa'] and features['swift']
                            'osdep/mac/menu_bar.swift',
                            'osdep/mac/option_helper.swift',
                            'osdep/mac/precise_timer.swift',
+                           'osdep/mac/presentation.swift',
                            'osdep/mac/swift_compat.swift',
                            'osdep/mac/swift_extensions.swift',
                            'osdep/mac/type_helper.swift',
@@ -1802,6 +1818,10 @@ endif
 
 if get_option('tests')
     subdir('test')
+endif
+
+if get_option('fuzzers')
+    subdir('fuzzers')
 endif
 
 summary({'d3d11': features['d3d11'],

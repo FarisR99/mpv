@@ -17,15 +17,22 @@
 
 #pragma once
 
+#include <stdbool.h>
+#include "options/m_option.h"
+
+struct input_ctx;
+struct mpv_handle;
+
 enum {
     FRAME_VISIBLE = 0,
     FRAME_WHOLE,
 };
 
 enum {
-    RENDER_TIMER_CALLBACK = 0,
-    RENDER_TIMER_PRECISE,
+    RENDER_TIMER_PRESENTATION_FEEDBACK = -1,
     RENDER_TIMER_SYSTEM,
+    RENDER_TIMER_CALLBACK,
+    RENDER_TIMER_PRECISE,
 };
 
 struct macos_opts {
@@ -46,5 +53,7 @@ void cocoa_uninit_media_keys(void);
 void cocoa_set_input_context(struct input_ctx *input_context);
 void cocoa_set_mpv_handle(struct mpv_handle *ctx);
 void cocoa_init_cocoa_cb(void);
+// multithreaded wrapper for mpv_main
+int cocoa_main(int argc, char *argv[]);
 
 extern const struct m_sub_options macos_conf;
