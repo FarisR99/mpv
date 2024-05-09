@@ -987,6 +987,8 @@ static bool is_usable(const AVFilter *filter, int media_type)
     int nb_inputs  = avfilter_pad_count(filter->inputs),
         nb_outputs = avfilter_pad_count(filter->outputs);
 #endif
+    if (nb_inputs > 1 || nb_outputs > 1)
+        return false;
     bool input_ok = filter->flags & AVFILTER_FLAG_DYNAMIC_INPUTS;
     bool output_ok = filter->flags & AVFILTER_FLAG_DYNAMIC_OUTPUTS;
     if (nb_inputs == 1)
@@ -1122,6 +1124,22 @@ static void print_help_v(struct mp_log *log)
 static void print_help_a(struct mp_log *log)
 {
     print_help(log, AVMEDIA_TYPE_AUDIO, "audio", "--af=lavfi=[volume=0.5]");
+}
+
+const char **mp_get_lavfi_filters(void *talloc_ctx, int media_type)
+{
+    const char **filters = NULL;
+    void *iter = NULL;
+    int num = 0;
+    for (;;) {
+        const AVFilter *filter = av_filter_iterate(&iter);
+        if (!filter)
+            break;
+        if (is_usable(filter, media_type))
+            MP_TARRAY_APPEND(talloc_ctx, filters, num, filter->name);
+    }
+    MP_TARRAY_APPEND(talloc_ctx, filters, num, NULL);
+    return filters;
 }
 
 #define OPT_BASE_STRUCT struct lavfi_user_opts

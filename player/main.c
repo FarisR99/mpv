@@ -44,6 +44,7 @@
 #include "options/m_option.h"
 #include "options/m_property.h"
 #include "common/common.h"
+#include "common/encode_lavc.h"
 #include "common/msg.h"
 #include "common/msg_control.h"
 #include "common/stats.h"
@@ -79,9 +80,9 @@ static const char def_config[] =
 #endif
 
 enum exit_reason {
-  EXIT_NONE,
-  EXIT_NORMAL,
-  EXIT_ERROR,
+    EXIT_NONE,
+    EXIT_NORMAL,
+    EXIT_ERROR,
 };
 
 const char mp_help_text[] =
@@ -139,6 +140,9 @@ void mp_update_logging(struct MPContext *mpctx, bool preinit)
 
     if (enabled && !preinit && mpctx->opts->consolecontrols)
         terminal_setup_getch(mpctx->input);
+
+    if (enabled)
+        encoder_update_log(mpctx->global);
 }
 
 void mp_print_version(struct mp_log *log, int always)

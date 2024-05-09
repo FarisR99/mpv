@@ -17,11 +17,8 @@
 
 #include <assert.h>
 #include <string.h>
-#include <strings.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <unistd.h>
-#include <dirent.h>
 #include <math.h>
 
 #include <lua.h>
@@ -60,6 +57,9 @@ static const char * const builtin_lua_scripts[][2] = {
     },
     {"mp.assdraw",
 #   include "player/lua/assdraw.lua.inc"
+    },
+    {"mp.fzy",
+#   include "player/lua/fzy.lua.inc"
     },
     {"mp.input",
 #   include "player/lua/input.lua.inc"

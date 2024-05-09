@@ -5,11 +5,11 @@ Track Selection
 ---------------
 
 ``--alang=<languagecode[,languagecode,...]>``
-    Specify a priority list of audio languages to use, as IETF language tags.
-    Equivalent ISO 639-1 two-letter and ISO 639-2 three-letter codes are treated the same.
-    The first tag in the list whose language matches a track in the file will be used.
-    A track that matches more subtags will be preferred over one that matches fewer,
-    with preference given to earlier subtags over later ones. See also ``--aid``.
+    Specify a prioritized list of audio languages to use, as IETF language tags.
+    Equivalent ISO 639-1 two-letter and ISO 639-2 three-letter codes are treated
+    the same. The first tag in the list that matches track's language in the file
+    will be used. A track that matches more subtags will be preferred over one
+    that matches fewer. See also ``--aid``.
 
     This is a string list option. See `List Options`_ for details.
 
@@ -4101,6 +4101,17 @@ Input
     Whether this applies depends on the VO backend and how it handles
     keyboard input. Does not apply to terminal input.
 
+``--native-touch=<yes|no>``
+    (Windows only)
+    For platforms which send emulated mouse inputs for touch-unaware clients,
+    such as Windows, use system native touch events, instead of receiving them
+    as emulated mouse events (default: no). This is required for multi-touch
+    support for these platforms.
+
+    Note that this option has no effect on other platforms: either native touch
+    is not supported by mpv, or the platform does not give an option to receive
+    emulated mouse inputs (so native touch is always enabled, e.g. Wayland).
+
 ``--input-ar-delay``
     Delay in milliseconds before we start to autorepeat a key (default: 200).
     Set it to 0 to disable.
@@ -4280,6 +4291,13 @@ Input
     and with this option disabled. Note that ``input-default-bindings`` is
     disabled by default in libmpv as well - it should be enabled if you want
     the mpv default key bindings.
+
+``--input-touch-emulate-mouse=<yes|no>``
+    When multi-touch support is enabled (either required by the platform,
+    or enabled by ``--native-touch``), emulate mouse move and button presses
+    for the touch events (default: yes). This is useful for compatibility
+    for mouse key bindings and scripts which read mouse positions for platforms
+    which do not support ``--native-touch=no`` (e.g. Wayland).
 
 OSD
 ---
@@ -6264,6 +6282,37 @@ them.
     Creates a 10bit capable pixel format for the context creation (default: yes).
     Instead of 8bit integer framebuffer a 16bit half-float framebuffer is
     requested.
+
+    macOS and cocoa-cb only.
+
+``--cocoa-cb-output-csp=<csp>``
+    This sets the color space of the layer to activate the macOS color
+    transformation. Depending on the color space used the system's EDR (HDR)
+    support will be activated. To get correct results, this needs to be set to
+    the color primaries/transfer characteristics of the VO target. It is recommended
+    to use this switch together with ``--target-trc`` and ``--target-prim``.
+
+    ``<csp>`` can be one of the following:
+
+    :auto:               Sets the color space to the icc profile of the
+                         screen (default).
+    :display-p3:         DCI P3 primaries, a D65 white point and the sRGB
+                         transfer function.
+    :display-p3-hlg:     DCI P3 primaries, a D65 white point and the Hybrid
+                         Log-Gamma (HLG) transfer function.
+    :display-p3-pq:      DCI P3 primaries, a D65 white point and the Perceptual
+                         Quantizer (PQ) transfer function.
+    :display-p3-linear:  DCI P3 primaries, a D65 white point and linear transfer function.
+    :dci-p3:             DCI P3 color space.
+    :bt.2020:            ITU BT.2020 color space.
+    :bt.2020-linear:     ITU BT.2020 color space and linear transfer function.
+    :bt.2100-hlg:        ITU BT.2100 and the Hybrid Log-Gamma (HLG) transfer function.
+    :bt.2100-pq:         ITU BT.2100 and the Perceptual Quantizer (PQ) transfer function.
+    :bt.709:             ITU BT.709 color space.
+    :srgb:               sRGB colorimetry and non-linear transfer function.
+    :srgb-linear:        Same as sRGB but linear transfer function.
+    :rgb-linear:         RGB and linear transfer function.
+    :adobe:              Adobe RGB (1998) color space.
 
     macOS and cocoa-cb only.
 

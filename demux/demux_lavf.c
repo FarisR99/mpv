@@ -21,7 +21,6 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <string.h>
-#include <strings.h>
 #include <errno.h>
 #include <assert.h>
 
@@ -41,6 +40,7 @@
 
 #include "audio/chmap_avchannel.h"
 
+#include "common/common.h"
 #include "common/msg.h"
 #include "common/tags.h"
 #include "common/av_common.h"
@@ -184,6 +184,7 @@ static const struct format_hack format_hacks[] = {
     // In theory, such streams might contain timestamps, but virtually none do.
     {"h264", .if_flags = AVFMT_NOTIMESTAMPS },
     {"hevc", .if_flags = AVFMT_NOTIMESTAMPS },
+    {"vvc", .if_flags = AVFMT_NOTIMESTAMPS },
 
     // Some Ogg shoutcast streams are essentially concatenated OGG files. They
     // reset timestamps, which causes all sorts of problems.

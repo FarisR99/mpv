@@ -775,7 +775,11 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
         Steps through the secondary subtitles.
 
 ``sub-seek <skip> <flags>``
-    Seek to the next (skip set to 1) or the previous (skip set to -1) subtitle.
+    Change video and audio position such that the subtitle event after
+    ``<skip>`` subtitle events is displayed. For example, ``sub-seek 1`` skips
+    to the next subtitle, ``sub-seek -1`` skips to the previous subtitles, and
+    ``sub-seek 0`` seeks to the beginning of the current subtitle.
+
     This is similar to ``sub-step``, except that it seeks video and audio
     instead of adjusting the subtitle delay.
 
@@ -788,7 +792,7 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
 
     For embedded subtitles (like with Matroska), this works only with subtitle
     events that have already been displayed, or are within a short prefetch
-    range.
+    range. See `Cache`_ for details on how to control the available prefetch range.
 
 ``print-text <text>``
     Print text to stdout. The string can contain properties (see
@@ -806,12 +810,12 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
     <level>
         The minimum OSD level to show the text at (see ``--osd-level``).
 
-``expand-text <string>``
+``expand-text <text>``
     Property-expand the argument and return the expanded string. This can be
     used only through the client API or from a script using
     ``mp.command_native``. (see `Property Expansion`_).
 
-``expand-path "<string>"``
+``expand-path "<text>"``
     Expand a path's double-tilde placeholders into a platform-specific path.
     As ``expand-text``, this can only be used through the client API or from
     a script using ``mp.command_native``.
@@ -822,6 +826,33 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
 
         This line of Lua would show the location of the user's mpv
         configuration directory on the OSD.
+
+``normalize-path <filename>``
+    Return a canonical representation of the path ``filename`` by converting it
+    to an absolute path, removing consecutive slashes, removing ``.``
+    components, resolving ``..`` components, and converting slashes to
+    backslashes on Windows. Symlinks are not resolved unless the platform is
+    Unix-like and one of the path components is ``..``. If ``filename`` is a
+    URL, it is returned unchanged. This can only be used through the client API
+    or from a script using ``mp.command_native``.
+
+    .. admonition:: Example
+
+        ``mp.osd_message(mp.command_native({"normalize-path", "/foo//./bar"}))``
+
+        This line of Lua prints "/foo/bar" on the OSD.
+
+``escape-ass <text>``
+    Modify ``text`` so that commands and functions that interpret ASS tags,
+    such as ``osd-overlay`` and ``mp.create_osd_overlay``, will display it
+    verbatim, and return it. This can only be used through the client API or
+    from a script using ``mp.command_native``.
+
+    .. admonition:: Example
+
+        ``mp.osd_message(mp.command_native({"escape-ass", "foo {bar}"}))``
+
+        This line of Lua prints "foo \\{bar}" on the OSD.
 
 ``show-progress``
     Show the progress bar, the elapsed time and the total duration of the file
@@ -1261,18 +1292,6 @@ Input Commands that are Possibly Subject to Change
         Always use named arguments (``mpv_command_node()``). Lua scripts should
         use the ``mp.create_osd_overlay()`` helper instead of invoking this
         command directly.
-
-``escape-ass <text>``
-    Modify ``text`` so that commands and functions that interpret ASS tags,
-    such as ``osd-overlay`` and ``mp.create_osd_overlay``, will display it
-    verbatim, and return it. This can only be used through the client API or
-    from a script using ``mp.command_native``.
-
-    .. admonition:: Example
-
-        ``mp.osd_message(mp.command_native({"escape-ass", "foo {bar}"}))``
-
-        This line of Lua prints "foo \\{bar}" on the OSD.
 
 ``script-message [<arg1> [<arg2> [...]]]``
     Send a message to all clients, and pass it the following list of arguments.
@@ -2318,6 +2337,11 @@ Property list
     other byte-oriented input layer) in bytes per second. May be inaccurate or
     missing.
 
+    ``ts-per-stream`` is an array containing an entry for each stream type: video,
+    audio, and subtitle. For each stream type, the details for the demuxer cache
+    for that stream type are available as ``cache-duration``, ``reader-pts`` and
+    ``cache-end``.
+
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
     the following contents:
@@ -2337,6 +2361,12 @@ Property list
             "reader-pts"        MPV_FORMAT_DOUBLE
             "cache-duration"    MPV_FORMAT_DOUBLE
             "raw-input-rate"    MPV_FORMAT_INT64
+            "ts-per-stream"     MPV_FORMAT_NODE_ARRAY
+                MPV_FORMAT_NODE_MAP
+                      "type"            MPV_FORMAT_STRING
+                      "cache-duration"  MPV_FORMAT_DOUBLE
+                      "reader-pts"      MPV_FORMAT_DOUBLE
+                      "cache-end"       MPV_FORMAT_DOUBLE
 
     Other fields (might be changed or removed in the future):
 
@@ -2522,7 +2552,7 @@ Property list
         Display aspect ratio as float.
 
     ``video-params/aspect-name``
-        Display aspect ratio name as string. The name coresponds to motion
+        Display aspect ratio name as string. The name corresponds to motion
         picture film format that introduced given aspect ratio in film.
 
     ``video-params/par``
@@ -2800,7 +2830,7 @@ Property list
     not being opened yet or not being supported by the VO.
 
 ``mouse-pos``
-    Read-only - last known mouse position, normalizd to OSD dimensions.
+    Read-only - last known mouse position, normalized to OSD dimensions.
 
     Has the following sub-properties (which can be read as ``MPV_FORMAT_NODE``
     or Lua table with ``mp.get_property_native``):
@@ -2812,6 +2842,35 @@ Property list
         Boolean - whether the mouse pointer hovers the video window. The
         coordinates should be ignored when this value is false, because the
         video backends update them only when the pointer hovers the window.
+
+``touch-pos``
+    Read-only - last known touch point positions, normalized to OSD dimensions.
+
+    This has a number of sub-properties. Replace ``N`` with the 0-based touch
+    point index. Whenever a new finger touches the screen, a new touch point is
+    added to the list of touch points with the smallest unused ``N`` available.
+
+    ``touch-pos/count``
+        Number of active touch points.
+
+    ``touch-pos/N/x``, ``touch-pos/N/y``
+        Position of the Nth touch point.
+
+    ``touch-pos/N/id``
+        Unique identifier of the touch point. This can be used to identify
+        individual touch points when their indexes change.
+
+    When querying the property with the client API using ``MPV_FORMAT_NODE``,
+    or with Lua ``mp.get_property_native``, this will return a mpv_node with
+    the following contents:
+
+    ::
+
+        MPV_FORMAT_NODE_ARRAY
+            MPV_FORMAT_NODE_MAP (for each touch point)
+                "x"        MPV_FORMAT_INT64
+                "y"        MPV_FORMAT_INT64
+                "id"       MPV_FORMAT_INT64
 
 ``sub-ass-extradata``
     The current ASS subtitle track's extradata. There is no formatting done.
