@@ -16,6 +16,7 @@
  */
 
 #include <CoreAudio/HostTime.h>
+#include <libavutil/mathematics.h>
 
 #include "ao.h"
 #include "internal.h"
@@ -90,7 +91,7 @@ static OSStatus render_cb_lpcm(void *ctx, AudioUnitRenderActionFlags *aflags,
     int64_t end = mp_time_ns();
     end += p->hw_latency_ns + ca_get_latency(ts) + ca_frames_to_ns(ao, frames);
     // don't use the returned sample count since CoreAudio always expects full frames
-    ao_read_data(ao, planes, frames, end);
+    ao_read_data(ao, planes, frames, end, NULL, true, true);
     return noErr;
 }
 
@@ -178,6 +179,7 @@ static int init(struct ao *ao)
         goto coreaudio_error;
 
     reinit_latency(ao);
+    ao->device_buffer = av_rescale(p->hw_latency_ns, ao->samplerate, 1000000000) * 2;
 
     p->queue = dispatch_queue_create("io.mpv.coreaudio_stop_during_idle",
                                      DISPATCH_QUEUE_SERIAL);

@@ -407,8 +407,6 @@ static struct cmd_bind *find_bind_for_key_section(struct input_ctx *ictx,
     for (int builtin = 0; builtin < 2; builtin++) {
         if (builtin && !ictx->opts->default_bindings)
             break;
-        if (best)
-            break;
         for (int n = 0; n < bs->num_binds; n++) {
             if (bs->binds[n].is_builtin == (bool)builtin) {
                 struct cmd_bind *b = &bs->binds[n];
@@ -418,7 +416,7 @@ static struct cmd_bind *find_bind_for_key_section(struct input_ctx *ictx,
                     if (b->keys[i] != keys[b->num_keys - 1 - i])
                         goto skip;
                 }
-                if (!best || b->num_keys >= best->num_keys)
+                if (!best || b->num_keys > best->num_keys)
                     best = b;
             skip: ;
             }
@@ -454,8 +452,12 @@ static struct cmd_bind *find_any_bind_for_key(struct input_ctx *ictx,
                                                                ictx->mouse_vo_x,
                                                                ictx->mouse_vo_y)))
             {
-                if (!best_bind || (best_bind->is_builtin && !bind->is_builtin))
+                if (!best_bind || bind->num_keys > best_bind->num_keys ||
+                    (best_bind->is_builtin && !bind->is_builtin &&
+                     bind->num_keys == best_bind->num_keys))
+                {
                     best_bind = bind;
+                }
             }
         }
         if (s->flags & MP_INPUT_EXCLUSIVE)
@@ -1420,7 +1422,7 @@ static bool parse_config_file(struct input_ctx *ictx, char *file)
     file = mp_get_user_path(tmp, ictx->global, file);
 
     s = stream_create(file, STREAM_ORIGIN_DIRECT | STREAM_READ, NULL, ictx->global);
-    if (!s) {
+    if (!s || s->is_directory) {
         MP_ERR(ictx, "Can't open input config file %s.\n", file);
         goto done;
     }

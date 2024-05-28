@@ -66,8 +66,6 @@ static const stream_info_t *const stream_list[] = {
 #if HAVE_CDDA
     &stream_info_cdda,
 #endif
-    &stream_info_ffmpeg,
-    &stream_info_ffmpeg_unsafe,
     &stream_info_avdevice,
 #if HAVE_DVBIN
     &stream_info_dvb,
@@ -92,6 +90,8 @@ static const stream_info_t *const stream_list[] = {
     &stream_info_slice,
     &stream_info_fd,
     &stream_info_cb,
+    &stream_info_ffmpeg,
+    &stream_info_ffmpeg_unsafe,
 };
 
 // Because of guarantees documented on STREAM_BUFFER_SIZE.
@@ -325,11 +325,16 @@ static int stream_create_instance(const stream_info_t *sinfo,
         if (!sinfo->local_fs)
             return STREAM_NO_MATCH;
     } else {
-        for (int n = 0; sinfo->protocols && sinfo->protocols[n]; n++) {
-            path = match_proto(url, sinfo->protocols[n]);
+        char **get_protocols = sinfo->get_protocols ? sinfo->get_protocols() : NULL;
+        char **protocols = get_protocols ? get_protocols : (char **)sinfo->protocols;
+
+        for (int n = 0; protocols && protocols[n]; n++) {
+            path = match_proto(url, protocols[n]);
             if (path)
                 break;
         }
+
+        talloc_free(get_protocols);
 
         if (!path)
             return STREAM_NO_MATCH;
@@ -471,8 +476,13 @@ struct stream *stream_create(const char *url, int flags,
 
 stream_t *open_output_stream(const char *filename, struct mpv_global *global)
 {
-    return stream_create(filename, STREAM_ORIGIN_DIRECT | STREAM_WRITE,
-                         NULL, global);
+    struct stream *s = stream_create(filename, STREAM_ORIGIN_DIRECT | STREAM_WRITE,
+                                     NULL, global);
+    if (s && s->is_directory) {
+        free_stream(s);
+        s = NULL;
+    }
+    return s;
 }
 
 // Read function bypassing the local stream buffer. This will not write into
@@ -804,6 +814,8 @@ struct bstr stream_read_complete(struct stream *s, void *talloc_ctx,
 {
     if (max_size <= 0 || max_size > STREAM_MAX_READ_SIZE)
         abort();
+    if (s->is_directory)
+        return (struct bstr){NULL, 0};
 
     int bufsize;
     int total_read = 0;
@@ -841,9 +853,12 @@ struct bstr stream_read_file(const char *filename, void *talloc_ctx,
                 STREAM_LESS_NOISE;
     stream_t *s = stream_create(filename, flags, NULL, global);
     if (s) {
-        res = stream_read_complete(s, talloc_ctx, max_size);
-        free_stream(s);
+        if (s->is_directory)
+            mp_err(s->log, "Failed to open %s (not a file).\n", filename);
+        else
+            res = stream_read_complete(s, talloc_ctx, max_size);
     }
+    free_stream(s);
     return res;
 }
 
@@ -854,16 +869,17 @@ char **stream_get_proto_list(void)
     for (int i = 0; i < MP_ARRAY_SIZE(stream_list); i++) {
         const stream_info_t *stream_info = stream_list[i];
 
-        if (!stream_info->protocols)
-            continue;
+        char **get_protocols = stream_info->get_protocols ? stream_info->get_protocols() : NULL;
+        char **protocols = get_protocols ? get_protocols : (char **)stream_info->protocols;
 
-        for (int j = 0; stream_info->protocols[j]; j++) {
-            if (*stream_info->protocols[j] == '\0')
-               continue;
+        for (int j = 0; protocols && protocols[j]; j++) {
+            if (*protocols[j] == '\0')
+                continue;
 
-            MP_TARRAY_APPEND(NULL, list, num,
-                                talloc_strdup(NULL, stream_info->protocols[j]));
+            MP_TARRAY_APPEND(NULL, list, num, talloc_strdup(list, protocols[j]));
         }
+
+        talloc_free(get_protocols);
     }
     MP_TARRAY_APPEND(NULL, list, num, NULL);
     return list;
@@ -878,7 +894,6 @@ void stream_print_proto_list(struct mp_log *log)
     for (int i = 0; list[i]; i++) {
         mp_info(log, " %s://\n", list[i]);
         count++;
-        talloc_free(list[i]);
     }
     talloc_free(list);
     mp_info(log, "\nTotal: %d protocols\n", count);
@@ -889,10 +904,19 @@ bool stream_has_proto(const char *proto)
     for (int i = 0; i < MP_ARRAY_SIZE(stream_list); i++) {
         const stream_info_t *stream_info = stream_list[i];
 
-        for (int j = 0; stream_info->protocols && stream_info->protocols[j]; j++) {
-            if (strcmp(stream_info->protocols[j], proto) == 0)
-                return true;
+        bool match = false;
+        char **get_protocols = stream_info->get_protocols ? stream_info->get_protocols() : NULL;
+        char **protocols = get_protocols ? get_protocols : (char **)stream_info->protocols;
+
+        for (int j = 0; protocols && protocols[j]; j++) {
+            if (strcmp(protocols[j], proto) == 0) {
+                match = true;
+                break;
+            }
         }
+
+        talloc_free(get_protocols);
+        return match;
     }
 
     return false;

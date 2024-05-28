@@ -146,7 +146,7 @@ Track Selection
 ``--subs-match-os-language=<yes|no>``
     When autoselecting a subtitle track, select the track that matches the language of your OS
     if the audio stream is in a different language if suitable (default track or a forced track
-    under the right conditions). Note that if ``-slang`` is set, this will be completely ignored
+    under the right conditions). Note that if ``--slang`` is set, this will be completely ignored
     (default: yes).
 
 ``--subs-fallback=<yes|default|no>``
@@ -1022,6 +1022,10 @@ Program Behavior
     Enable the builtin script that does auto profiles (default: auto). See
     `Conditional auto profiles`_ for details. ``auto`` will load the script,
     but immediately unload it if there are no conditional profiles.
+
+``--load-select=<yes|no>``
+    Enable the builtin script that lets you select from lists of items (default:
+    yes). By default, its keybindings start with the ``g`` key.
 
 ``--player-operation-mode=<cplayer|pseudo-gui>``
     For enabling "pseudo GUI mode", which means that the defaults for some
@@ -2387,7 +2391,8 @@ Subtitles
     Whether to scale subtitles with the window size (default: yes). If this is
     disabled, changing the window size won't change the subtitle font size.
 
-    Like ``--sub-scale``, this can break ASS subtitles.
+    Affects plain text subtitles only (or ASS if ``--sub-ass-override`` is set
+    high enough).
 
 ``--sub-scale-with-window=<yes|no>``
     Make the subtitle font size relative to the window, instead of the video.
@@ -4470,12 +4475,18 @@ OSD
     are always in actual pixels. The effect is that changing the window size
     won't change the OSD font size.
 
+    .. note::
+
+        For scripts which draw user interface elements, it is recommended to
+        respect the value of this option when deciding whether the elements
+        are scaled with window size or not.
+
 ``--osd-shadow-color=<color>``
     See ``--sub-color``. Color used for OSD shadow.
 
     .. note::
 
-        ignored when ``--osd-back-color`` is specified (or more exactly: when
+        Ignored when ``--osd-back-color`` is specified (or more exactly: when
         that option is not set to completely transparent).
 
 ``--osd-shadow-offset=<size>``
@@ -6443,6 +6454,9 @@ them.
     order. You can also pass ``help`` to get a complete list of compiled in backends
     (sorted by the default autoprobe order).
 
+    Note that the default GPU context is subject to change, and must not be relied upon.
+    If a certain GPU context needs to be used, it must be explicitly specified.
+
     auto
         auto-select (default). Note that this context must be used alone and
         does not participate in the priority list.
@@ -6485,7 +6499,9 @@ them.
     Controls which type of graphics APIs will be accepted:
 
     auto
-        Use any available API (default)
+        Use any available API (default). Note that the default GPU API used for this
+        value is subject to change, and must not be relied upon. If a certain GPU API
+        needs to be used, it must be explicitly specified.
     opengl
         Allow only OpenGL (requires OpenGL 2.1+ or GLES 2.0+)
     vulkan

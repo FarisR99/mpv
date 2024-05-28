@@ -143,12 +143,14 @@ AVRational mp_get_codec_timebase(const struct mp_codec_params *c)
 
     // If the timebase is too coarse, raise its precision, or small adjustments
     // to timestamps done between decoder and demuxer could be lost.
+    int64_t den = tb.den;
     if (av_q2d(tb) > 0.001) {
-        AVRational r = av_div_q(tb, (AVRational){1, 1000});
-        tb.den *= (r.num + r.den - 1) / r.den;
+        int64_t scaling_num = tb.num * INT64_C(1000);
+        int64_t scaling_den = tb.den;
+        den *= (scaling_num + scaling_den - 1) / scaling_den;
     }
 
-    av_reduce(&tb.num, &tb.den, tb.num, tb.den, INT_MAX);
+    av_reduce(&tb.num, &tb.den, tb.num, den, INT_MAX);
 
     if (tb.num < 1 || tb.den < 1)
         tb = AV_TIME_BASE_Q;
@@ -263,8 +265,20 @@ char **mp_get_lavf_demuxers(void)
         const AVInputFormat *cur = av_demuxer_iterate(&iter);
         if (!cur)
             break;
-        MP_TARRAY_APPEND(NULL, list, num, talloc_strdup(NULL, cur->name));
+        MP_TARRAY_APPEND(NULL, list, num, talloc_strdup(list, cur->name));
     }
+    MP_TARRAY_APPEND(NULL, list, num, NULL);
+    return list;
+}
+
+char **mp_get_lavf_protocols(void)
+{
+    char **list = NULL;
+    int num = 0;
+    void *opaque = NULL;
+    const char *name;
+    while ((name = avio_enum_protocols(&opaque, 0)))
+        MP_TARRAY_APPEND(NULL, list, num, talloc_strdup(list, name));
     MP_TARRAY_APPEND(NULL, list, num, NULL);
     return list;
 }

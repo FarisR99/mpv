@@ -247,16 +247,13 @@ Configurable Options
 
     Scale factor of the OSC when fullscreen
 
-``scaleforcedwindow``
-    Default: 2.0
-
-    Scale factor of the OSC when rendered on a forced (dummy) window
-
 ``vidscale``
-    Default: yes
+    Default: auto
 
-    Scale the OSC with the video
-    ``no`` tries to keep the OSC size constant as much as the window size allows
+    Scale the OSC with the video.
+    ``no`` tries to keep the OSC size constant as much as the window size allows.
+    ``auto`` scales the OSC with the OSD, which is scaled with the window or kept at a
+    constant size, depending on the ``--osd-scale-by-window`` option.
 
 ``valign``
     Default: 0.8

@@ -45,6 +45,7 @@
 
 struct spdifContext {
     struct mp_log   *log;
+    struct mp_codec_params *codec;
     enum AVCodecID   codec_id;
     AVFormatContext *lavf_ctx;
     AVPacket        *avpkt;
@@ -117,15 +118,17 @@ static void determine_codec_params(struct mp_filter *da, AVPacket *pkt,
 
         uint8_t *d = NULL;
         int s = 0;
-        av_parser_parse2(parser, ctx, &d, &s, pkt->data, pkt->size, 0, 0, 0);
-        *out_profile = profile = ctx->profile;
-        *out_rate = ctx->sample_rate;
+        if (av_parser_parse2(parser, ctx, &d, &s, pkt->data, pkt->size, 0, 0, 0) > 0) {
+            *out_profile = profile = ctx->profile;
+            *out_rate = ctx->sample_rate;
+            spdif_ctx->codec->codec_profile = avcodec_profile_name(spdif_ctx->codec_id, profile);
+        }
 
         avcodec_free_context(&ctx);
         av_parser_close(parser);
     }
 
-    if (profile != AV_PROFILE_UNKNOWN  || spdif_ctx->codec_id != AV_CODEC_ID_DTS)
+    if (profile != AV_PROFILE_UNKNOWN || spdif_ctx->codec_id == AV_CODEC_ID_AC3)
         return;
 
     const AVCodec *codec = avcodec_find_decoder(spdif_ctx->codec_id);
@@ -150,6 +153,13 @@ static void determine_codec_params(struct mp_filter *da, AVPacket *pkt,
 
     *out_profile = profile = ctx->profile;
     *out_rate = ctx->sample_rate;
+
+    struct mp_codec_params *c = spdif_ctx->codec;
+    c->codec_profile = av_get_profile_name(ctx->codec, ctx->profile);
+    if (!c->codec_profile)
+        c->codec_profile = avcodec_profile_name(ctx->codec_id, ctx->profile);
+    c->codec = ctx->codec_descriptor->name;
+    c->codec_desc = ctx->codec_descriptor->long_name;
 
 done:
     av_frame_free(&frame);
@@ -432,6 +442,7 @@ static struct mp_decoder *create(struct mp_filter *parent,
 
     struct spdifContext *spdif_ctx = da->priv;
     spdif_ctx->log = da->log;
+    spdif_ctx->codec = codec;
     spdif_ctx->pool = mp_aframe_pool_create(spdif_ctx);
     spdif_ctx->public.f = da;
 
@@ -445,6 +456,10 @@ static struct mp_decoder *create(struct mp_filter *parent,
         talloc_free(da);
         return NULL;
     }
+
+    const AVCodecDescriptor *desc = avcodec_descriptor_get(spdif_ctx->codec_id);
+    if (desc)
+        codec->codec_desc = desc->long_name;
 
     return &spdif_ctx->public;
 }

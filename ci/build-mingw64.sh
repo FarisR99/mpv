@@ -194,8 +194,7 @@ _vulkan_headers_mark=include/vulkan/vulkan.h
 _vulkan_loader () {
     [ -d Vulkan-Loader ] || $gitclone https://github.com/KhronosGroup/Vulkan-Loader
     builddir Vulkan-Loader
-    cmake .. "${cmake_args[@]}" \
-        -DENABLE_WERROR=OFF -DUSE_GAS=ON
+    cmake .. "${cmake_args[@]}" -DUSE_GAS=ON
     makeplusinstall
     popd
 }
@@ -246,8 +245,7 @@ _harfbuzz_mark=lib/libharfbuzz.dll.a
 _libass () {
     [ -d libass ] || $gitclone https://github.com/libass/libass.git
     builddir libass
-    [ -f ../configure ] || (cd .. && ./autogen.sh)
-    ../configure --host=$TARGET $commonflags
+    meson setup .. --cross-file "$prefix_dir/crossfile" -Ddefault_library=shared
     makeplusinstall
     popd
 }
