@@ -646,9 +646,8 @@ static void update_av_diff(struct MPContext *mpctx, double offset)
     if (mpctx->vo_chain && mpctx->vo_chain->is_sparse)
         return;
 
-    double a_pos = written_audio_pts(mpctx);
+    double a_pos = playing_audio_pts(mpctx);
     if (a_pos != MP_NOPTS_VALUE && mpctx->video_pts != MP_NOPTS_VALUE) {
-        a_pos -= mpctx->audio_speed * ao_get_delay(mpctx->ao);
         mpctx->last_av_difference = a_pos - mpctx->video_pts
                                   + opts->audio_delay + offset;
     }
@@ -1245,10 +1244,7 @@ void write_video(struct MPContext *mpctx)
     if (opts->untimed || vo->driver->untimed)
         diff = -1; // disable frame dropping and aspects of frame timing
     if (diff >= 0) {
-        // expected A/V sync correction is ignored
         diff /= mpctx->video_speed;
-        if (mpctx->time_frame < 0)
-            diff += mpctx->time_frame;
         frame->duration = MP_TIME_S_TO_NS(MPCLAMP(diff, 0, 10));
     }
 
