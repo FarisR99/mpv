@@ -106,25 +106,3 @@ stds = { mp = { read_globals = mp_globals } }
 files["player/lua/defaults.lua"] = { globals = mp_internal }
 files["player/lua/auto_profiles.lua"] = { globals = { "p", "get" } }
 max_line_length = 100
-
--- TODO: Remove everything below this line
-local todo = {
-    "player/lua/console.lua",
-    "player/lua/osc.lua",
-    "player/lua/ytdl_hook.lua",
-    "TOOLS/lua/ao-null-reload.lua",
-    "TOOLS/lua/autocrop.lua",
-    "TOOLS/lua/autodeint.lua",
-    "TOOLS/lua/autoload.lua",
-    "TOOLS/lua/command-test.lua",
-    "TOOLS/lua/cycle-deinterlace-pullup.lua",
-    "TOOLS/lua/nan-test.lua",
-    "TOOLS/lua/observe-all.lua",
-    "TOOLS/lua/osd-test.lua",
-    "TOOLS/lua/status-line.lua",
-    "TOOLS/lua/test-hooks.lua",
-}
-for _, path in ipairs(todo) do
-    files[path]["allow_defined"] = true
-    files[path]["max_line_length"] = 120
-end

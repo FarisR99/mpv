@@ -23,6 +23,10 @@ export LDFLAGS="-fstack-protector-strong"
 export PKG_CONFIG_SYSROOT_DIR="$prefix_dir"
 export PKG_CONFIG_LIBDIR="$PKG_CONFIG_SYSROOT_DIR/lib/pkgconfig"
 
+if [[ "$TARGET" == "i686-"* ]]; then
+    export WINEPATH="`$CC -print-file-name=`;/usr/$TARGET/lib"
+fi
+
 # autotools(-like)
 commonflags="--disable-static --enable-shared"
 
@@ -39,8 +43,10 @@ cpp = ['ccache', '${CXX}']
 ar = '${AR}'
 strip = '${TARGET}-strip'
 pkgconfig = 'pkg-config'
+pkg-config = 'pkg-config'
 windres = '${TARGET}-windres'
 dlltool = '${TARGET}-dlltool'
+exe_wrapper = 'wine'
 [host_machine]
 system = 'windows'
 cpu_family = '${fam}'
@@ -51,6 +57,7 @@ EOF
 # CMake
 cmake_args=(
     -Wno-dev
+    -GNinja
     -DCMAKE_SYSTEM_PROCESSOR="${fam}"
     -DCMAKE_SYSTEM_NAME=Windows
     -DCMAKE_FIND_ROOT_PATH="$PKG_CONFIG_SYSROOT_DIR"
@@ -141,7 +148,7 @@ _ffmpeg () {
         --pkg-config=pkg-config --target-os=mingw32
         --enable-cross-compile --cross-prefix=$TARGET- --arch=${TARGET%%-*}
         --cc="$CC" --cxx="$CXX" $commonflags
-        --disable-{doc,programs,muxers,encoders}
+        --disable-{doc,programs}
         --enable-muxer=spdif --enable-encoder=mjpeg,png --enable-libdav1d
     )
     pkg-config vulkan && args+=(--enable-vulkan --enable-libshaderc)
@@ -290,7 +297,7 @@ meson setup $build --cross-file "$prefix_dir/crossfile" \
     --werror                   \
     -Dc_args="-Wno-error=deprecated -Wno-error=deprecated-declarations" \
     --buildtype debugoptimized \
-    -Dlibmpv=true -Dlua=luajit \
+    -D{libmpv,tests}=true -Dlua=luajit \
     -D{shaderc,spirv-cross,d3d11}=enabled
 
 meson compile -C $build

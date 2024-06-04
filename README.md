@@ -2,14 +2,10 @@
 
 # mpv
 
-This is mpv adapted for usage in docker. It supports vulkan, using shaders and everything else what mpv support.
+This is mpv adapted for usage in docker. It supports vulkan, using shaders and everything else that mpv supports.
 
 To build it:
 ```shell
 docker compose build . -t mpv:latest
 ```
 
-Or you can pull it from dockerhub:
-```shell
-docker pull mpv:4.0
-```

@@ -4139,6 +4139,12 @@ Input
     option is applied only during (lib)mpv initialization, and if disabled then it
     will not be not possible to enable them later. May be useful to libmpv clients.
 
+``--input-builtin-dragging=<yes|no>``
+    Enable the built-in window-dragging behavior (default: yes). Setting it to no
+    disables the built-in dragging behavior. Note that unlike the ``window-dragging``
+    option, this option only affects VOs which support the ``begin-vo-dragging``
+    command, and does not disable window dragging initialized with the command.
+
 ``--input-cmdlist``
     Prints all commands that can be bound to keys.
 
@@ -4236,8 +4242,7 @@ Input
 
 ``--input-cursor=<yes|no>``
     Permit mpv to receive pointer events reported by the video output
-    driver. Necessary to use the OSC, or to select the buttons in DVD menus.
-    Support depends on the VO in use.
+    driver. Necessary to use the OSC. Support depends on the VO in use.
 
 ``--input-cursor-passthrough=<yes|no>``
     Tell the backend windowing system to allow pointer events to passthrough
@@ -4303,6 +4308,11 @@ Input
     for the touch events (default: yes). This is useful for compatibility
     for mouse key bindings and scripts which read mouse positions for platforms
     which do not support ``--native-touch=no`` (e.g. Wayland).
+
+``--input-dragging-deadzone=<N>``
+    Begin the built-in window dragging when the mouse moves outside a deadzone of
+    ``N`` pixels while the mouse button is being held down (default: 3). This only
+    affects VOs which support the ``begin-vo-dragging`` command.
 
 OSD
 ---
