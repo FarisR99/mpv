@@ -27,15 +27,19 @@ on:
 
 jobs:
   mingw:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     env:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 500M
+      WINE: ${{ matrix.wine }}
     strategy:
       fail-fast: false
       matrix:
-        target: [i686-w64-mingw32, x86_64-w64-mingw32]
+        include:
+          - target: i686-w64-mingw32
+          - target: x86_64-w64-mingw32
+            wine: wine
     steps:
       - uses: actions/checkout@v4
 
@@ -50,12 +54,23 @@ jobs:
           key: ${{ matrix.target }}-${{ steps.get_time.outputs.timestamp }}
           restore-keys: ${{ matrix.target }}-
 
-      - name: Install dependencies
+      # For LuaJIT build
+      - name: Enable multilib
+        if: ${{ matrix.target == 'i686-w64-mingw32' }}
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y ccache g++-mingw-w64 gcc-multilib nasm ninja-build pkg-config python3-pip wine wine32 wine64
-          sudo python3 -m pip install meson
+          sudo apt-get install -y gcc-multilib
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache g++-mingw-w64 meson nasm ninja-build pkg-config ${{ matrix.wine }}
+
+      - name: Install Meson Wraps
+        run: |
+          mkdir subprojects -p
+          meson wrap install mujs
 
       - name: Build libraries
         run: |
@@ -76,12 +91,14 @@ jobs:
           cat ./mingw_build/meson-logs/meson-log.txt
 
       - name: Functional test
+        if: ${{ matrix.wine }}
         run: |
           cd artifact && wine ./mpv.com -v --no-config
         env:
           WINEDEBUG: '+loaddll'
 
       - name: Run meson tests
+        if: ${{ matrix.wine }}
         id: tests
         run: |
           meson test -C mingw_build
@@ -487,7 +504,9 @@ jobs:
       fail-fast: false
       matrix:
         sys:
+          - clang32
           - clang64
+          - mingw32
           - mingw64
           - ucrt64
     defaults:
@@ -506,10 +525,8 @@ jobs:
           update: true
           install: git
           pacboy: >-
-            angleproject:p
             ca-certificates:p
             cc:p
-            diffutils:p
             ffmpeg:p
             lcms2:p
             libarchive:p
@@ -523,18 +540,23 @@ jobs:
             ninja:p
             pkgconf:p
             python:p
-            rst2pdf:p
-            rubberband:p
             shaderc:p
             spirv-cross:p
             uchardet:p
             vapoursynth:p
             vulkan-devel:p
 
+      - name: Install dependencies
+        if: ${{ matrix.sys != 'clang32' && matrix.sys != 'mingw32' }}
+        run: |
+          pacboy --noconfirm -S {angleproject,rst2pdf,rubberband}:p
+
       - name: Build with meson
         id: build
         run: |
           ./ci/build-msys2.sh meson
+        env:
+          SYS: ${{ matrix.sys }}
 
       - name: Print meson log
         if: ${{ failure() && steps.build.outcome == 'failure' }}

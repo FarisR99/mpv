@@ -56,7 +56,6 @@ local user_opts = {
     livemarkers = true,         -- update seekbar chapter markers on duration change
     chapters_osd = true,        -- whether to show chapters OSD on next/prev
     playlist_osd = true,        -- whether to show playlist OSD on next/prev
-    playlist_media_title = true, -- whether to use media titles as playlist entry names
     chapter_fmt = "Chapter: %s", -- chapter print format for seekbar-hover. "no" to disable
     unicodeminus = false,       -- whether to use the Unicode minus sign character
 
@@ -105,28 +104,32 @@ end
 
 -- luacheck: push ignore
 -- luacheck: max line length
-local osc_styles = {
-    bigButtons = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.buttons_color) .. "\\3c&HFFFFFF\\fs50\\fnmpv-osd-symbols}",
-    smallButtonsL = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.small_buttonsL_color) .. "\\3c&HFFFFFF\\fs19\\fnmpv-osd-symbols}",
-    smallButtonsLlabel = "{\\fscx105\\fscy105\\fn" .. mp.get_property("options/osd-font") .. "}",
-    smallButtonsR = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.small_buttonsR_color) .. "\\3c&HFFFFFF\\fs30\\fnmpv-osd-symbols}",
-    topButtons = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.top_buttons_color) .. "\\3c&HFFFFFF\\fs12\\fnmpv-osd-symbols}",
+local osc_styles
 
-    elementDown = "{\\1c&H" .. osc_color_convert(user_opts.held_element_color) .."}",
-    timecodes = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.timecode_color) .. "\\3c&HFFFFFF\\fs20}",
-    vidtitle = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.title_color) .. "\\3c&HFFFFFF\\fs12\\q2}",
-    box = "{\\rDefault\\blur0\\bord1\\1c&H" .. osc_color_convert(user_opts.background_color) .. "\\3c&HFFFFFF}",
+local function set_osc_styles()
+	osc_styles = {
+	    bigButtons = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.buttons_color) .. "\\3c&HFFFFFF\\fs50\\fnmpv-osd-symbols}",
+	    smallButtonsL = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.small_buttonsL_color) .. "\\3c&HFFFFFF\\fs19\\fnmpv-osd-symbols}",
+	    smallButtonsLlabel = "{\\fscx105\\fscy105\\fn" .. mp.get_property("options/osd-font") .. "}",
+	    smallButtonsR = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.small_buttonsR_color) .. "\\3c&HFFFFFF\\fs30\\fnmpv-osd-symbols}",
+	    topButtons = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.top_buttons_color) .. "\\3c&HFFFFFF\\fs12\\fnmpv-osd-symbols}",
 
-    topButtonsBar = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.top_buttons_color) .. "\\3c&HFFFFFF\\fs18\\fnmpv-osd-symbols}",
-    smallButtonsBar = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.buttons_color) .. "\\3c&HFFFFFF\\fs28\\fnmpv-osd-symbols}",
-    timecodesBar = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.timecode_color) .."\\3c&HFFFFFF\\fs27}",
-    timePosBar = "{\\blur0\\bord".. user_opts.tooltipborder .."\\1c&H" .. osc_color_convert(user_opts.time_pos_color) .. "\\3c&H" .. osc_color_convert(user_opts.time_pos_outline_color) .. "\\fs30}",
-    vidtitleBar = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.title_color) .. "\\3c&HFFFFFF\\fs18\\q2}",
+	    elementDown = "{\\1c&H" .. osc_color_convert(user_opts.held_element_color) .."}",
+	    timecodes = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.timecode_color) .. "\\3c&HFFFFFF\\fs20}",
+	    vidtitle = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.title_color) .. "\\3c&HFFFFFF\\fs12\\q2}",
+	    box = "{\\rDefault\\blur0\\bord1\\1c&H" .. osc_color_convert(user_opts.background_color) .. "\\3c&HFFFFFF}",
 
-    wcButtons = "{\\1c&H" .. osc_color_convert(user_opts.buttons_color) .. "\\fs24\\fnmpv-osd-symbols}",
-    wcTitle = "{\\1c&H" .. osc_color_convert(user_opts.title_color) .. "\\fs24\\q2}",
-    wcBar = "{\\1c&H" .. osc_color_convert(user_opts.background_color) .. "}",
-}
+	    topButtonsBar = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.top_buttons_color) .. "\\3c&HFFFFFF\\fs18\\fnmpv-osd-symbols}",
+	    smallButtonsBar = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.buttons_color) .. "\\3c&HFFFFFF\\fs28\\fnmpv-osd-symbols}",
+	    timecodesBar = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.timecode_color) .."\\3c&HFFFFFF\\fs27}",
+	    timePosBar = "{\\blur0\\bord".. user_opts.tooltipborder .."\\1c&H" .. osc_color_convert(user_opts.time_pos_color) .. "\\3c&H" .. osc_color_convert(user_opts.time_pos_outline_color) .. "\\fs30}",
+	    vidtitleBar = "{\\blur0\\bord0\\1c&H" .. osc_color_convert(user_opts.title_color) .. "\\3c&HFFFFFF\\fs18\\q2}",
+
+	    wcButtons = "{\\1c&H" .. osc_color_convert(user_opts.buttons_color) .. "\\fs24\\fnmpv-osd-symbols}",
+	    wcTitle = "{\\1c&H" .. osc_color_convert(user_opts.title_color) .. "\\fs24\\q2}",
+	    wcBar = "{\\1c&H" .. osc_color_convert(user_opts.background_color) .. "}",
+	}
+end
 
 -- internal states, do not touch
 local state = {
@@ -521,14 +524,20 @@ local function get_playlist()
     end
 
     local message = string.format('Playlist [%d/%d]:\n', pos, count)
+    local show = mp.get_property_native('osd-playlist-entry')
     for _, v in ipairs(limlist) do
-        local title = v.title
-        local _, filename = utils.split_path(v.filename)
-        if not user_opts.playlist_media_title or title == nil then
-            title = filename
+        local entry = v.title
+        if not entry or show ~= 'title' then
+            entry = v.filename
+            if not entry:find("://") then
+                entry = select(2, utils.split_path(entry))
+            end
+        end
+        if v.title and show == 'both' then
+            entry = string.format('%s (%s)', v.title, entry)
         end
         message = string.format('%s %s %s\n', message,
-            (v.current and '●' or '○'), title)
+            (v.current and '●' or '○'), entry)
     end
     return message
 end
@@ -2970,6 +2979,7 @@ end
 -- read options from config and command-line
 opt.read_options(user_opts, "osc", function()
     validate_user_opts()
+    set_osc_styles()
     request_tick()
     visibility_mode(user_opts.visibility, true)
     update_duration_watch()
@@ -2977,6 +2987,7 @@ opt.read_options(user_opts, "osc", function()
 end)
 
 validate_user_opts()
+set_osc_styles()
 visibility_mode(user_opts.visibility, true)
 update_duration_watch()
 

@@ -100,6 +100,7 @@ extern const struct m_sub_options macos_conf;
 extern const struct m_sub_options wayland_conf;
 extern const struct m_sub_options wingl_conf;
 extern const struct m_sub_options vaapi_conf;
+extern const struct m_sub_options egl_conf;
 
 static const struct m_sub_options screenshot_conf = {
     .opts = image_writer_opts,
@@ -862,6 +863,9 @@ static const m_option_t mp_opts[] = {
     {"osd-msg2", OPT_STRING(osd_msg[1]), .flags = UPDATE_OSD},
     {"osd-msg3", OPT_STRING(osd_msg[2]), .flags = UPDATE_OSD},
 
+    {"osd-playlist-entry", OPT_CHOICE(playlist_entry_name,
+        {"title", 0}, {"filename", 1}, {"both", 2})},
+
     {"video-osd", OPT_BOOL(video_osd), .flags = UPDATE_OSD},
 
     {"idle", OPT_CHOICE(player_idle_mode,
@@ -898,6 +902,10 @@ static const m_option_t mp_opts[] = {
 
 #if HAVE_GL
     {"", OPT_SUBSTRUCT(opengl_opts, opengl_conf)},
+#endif
+
+#if HAVE_EGL || HAVE_EGL_ANDROID || HAVE_EGL_ANGLE_WIN32
+    {"egl", OPT_SUBSTRUCT(egl_opts, egl_conf)},
 #endif
 
 #if HAVE_VULKAN

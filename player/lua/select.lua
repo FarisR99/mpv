@@ -28,9 +28,19 @@ end
 mp.add_forced_key_binding(nil, "select-playlist", function ()
     local playlist = {}
     local default_item
+    local show = mp.get_property_native("osd-playlist-entry")
 
     for i, entry in ipairs(mp.get_property_native("playlist")) do
-        playlist[i] = select(2, utils.split_path(entry.filename))
+        playlist[i] = entry.title
+        if not playlist[i] or show ~= "title" then
+            playlist[i] = entry.filename
+            if not playlist[i]:find("://") then
+                playlist[i] = select(2, utils.split_path(playlist[i]))
+            end
+        end
+        if entry.title and show == "both" then
+            playlist[i] = string.format("%s (%s)", entry.title, playlist[i])
+        end
 
         if entry.playing then
             default_item = i
@@ -149,13 +159,17 @@ mp.add_forced_key_binding(nil, "select-vid", function ()
                  "No available video tracks.")
 end)
 
-local function format_time(t)
+local function format_time(t, duration)
     local h = math.floor(t / (60 * 60))
     t = t - (h * 60 * 60)
     local m = math.floor(t / 60)
     local s = t - (m * 60)
 
-    return string.format("%.2d:%.2d:%.2d", h, m, s)
+    if duration >= 60 * 60 or h > 0 then
+        return string.format("%.2d:%.2d:%.2d", h, m, s)
+    end
+
+    return string.format("%.2d:%.2d", m, s)
 end
 
 mp.add_forced_key_binding(nil, "select-chapter", function ()
@@ -167,8 +181,10 @@ mp.add_forced_key_binding(nil, "select-chapter", function ()
         return
     end
 
+    local duration = mp.get_property_native("duration", math.huge)
+
     for i, chapter in ipairs(mp.get_property_native("chapter-list")) do
-        chapters[i] = format_time(chapter.time) .. " " .. chapter.title
+        chapters[i] = format_time(chapter.time, duration) .. " " .. chapter.title
     end
 
     input.select({
@@ -187,6 +203,11 @@ mp.add_forced_key_binding(nil, "select-subtitle-line", function ()
     if sub == nil then
         show_error("No subtitle is loaded.")
         return
+    end
+
+    if sub.external and sub["external-filename"]:find("^edl://") then
+        sub["external-filename"] = sub["external-filename"]:match('https?://.*')
+                                   or sub["external-filename"]
     end
 
     local r = mp.command_native({
@@ -209,44 +230,30 @@ mp.add_forced_key_binding(nil, "select-subtitle-line", function ()
     end
 
     local sub_lines = {}
+    local sub_times = {}
     local default_item
-
     local sub_start = mp.get_property_native("sub-start",
-                                             mp.get_property("time-pos"))
-    local m = math.floor(sub_start / 60)
-    local s = sub_start - m * 60
-    sub_start = string.format("%.2d:%05.2f", m, s)
+                                             mp.get_property_native("time-pos"))
+    local duration = mp.get_property_native("duration", math.huge)
 
     -- Strip HTML and ASS tags.
     for line in r.stdout:gsub("<.->", ""):gsub("{\\.-}", ""):gmatch("[^\n]+") do
-        sub_lines[#sub_lines + 1] = line:sub(2):gsub("]", " ", 1)
+        -- ffmpeg outputs LRCs with minutes > 60 instead of adding hours.
+        sub_times[#sub_times + 1] = line:match("%d+") * 60 + line:match(":([%d%.]*)")
+        sub_lines[#sub_lines + 1] = format_time(sub_times[#sub_times], duration) ..
+                                    " " .. line:gsub(".*]", "", 1)
 
-        if line:find("^%[" .. sub_start) then
-            default_item = #sub_lines
+        if sub_times[#sub_times] <= sub_start then
+            default_item = #sub_times
         end
     end
 
-    -- Preselect the previous line when there is no exact match.
-    if default_item == nil then
-        local a = 1
-        local b = #sub_lines
-        while a < b do
-            local mid = math.ceil(b - a)
-
-            if sub_lines[mid]:match("%S*") < sub_start then
-                default_item = mid
-                a = mid + 1
-            else
-                b = mid
-            end
-        end
-
-        -- Handle sub-start of embedded subs being slightly earlier than
-        -- ffmpeg's timestamps.
-        if mp.get_property("sub-start") and default_item and
-           sub_lines[default_item + 1] then
-            default_item = default_item + 1
-        end
+    -- Handle sub-start of embedded subs being slightly earlier than
+    -- ffmpeg's timestamps.
+    sub_start = mp.get_property_native("sub-start")
+    if sub_start and default_item and sub_times[default_item] < sub_start and
+       sub_lines[default_item + 1] then
+        default_item = default_item + 1
     end
 
     input.select({
@@ -254,7 +261,11 @@ mp.add_forced_key_binding(nil, "select-subtitle-line", function ()
         items = sub_lines,
         default_item = default_item,
         submit = function (index)
-            mp.commandv("seek", sub_lines[index]:match("%S*"), "absolute")
+            -- Add an offset to seek to the correct line while paused without a
+            -- video track.
+            local offset = mp.get_property_native("current-tracks/video/image") == false
+                           and 0 or .09
+            mp.commandv("seek", sub_times[index] + offset, "absolute")
         end,
     })
 end)
