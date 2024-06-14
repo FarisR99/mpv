@@ -69,7 +69,10 @@ local user_opts = {
     top_buttons_color = "#FFFFFF",	-- color of top buttons
     held_element_color = "#999999",	-- color of an element while held down
 
-    time_pos_outline_color = "#000000"	-- color of the border timecodes in slimbox and TimePosBar
+    time_pos_outline_color = "#000000",	-- color of the border timecodes in slimbox and TimePosBar
+
+    tick_delay = 1 / 60,                  -- minimum interval between OSC redraws in seconds
+    tick_delay_follow_display_fps = false -- use display fps as the minimum interval
 }
 
 local osc_param = { -- calculated by osc_init()
@@ -90,7 +93,7 @@ local margins_opts = {
     {"b", "video-margin-ratio-bottom"},
 }
 
-local tick_delay = 0.03
+local tick_delay = 1 / 60
 local tracks_osc = {}
 local tracks_mpv = {}
 local window_control_box_width = 80
@@ -217,6 +220,15 @@ local function set_osd(res_x, res_y, text, z)
     state.osd.data = text
     state.osd.z = z
     state.osd:update()
+end
+
+local function set_time_styles(timetotal_changed, timems_changed)
+    if timetotal_changed then
+        state.rightTC_trem = not user_opts.timetotal
+    end
+    if timems_changed then
+        state.tc_ms = user_opts.timems
+    end
 end
 
 -- scale factor for translating between real and virtual ASS coordinates
@@ -2093,7 +2105,7 @@ local function osc_init()
     ne.enabled = mp.get_property("percent-pos") ~= nil
     state.slider_element = ne.enabled and ne or nil  -- used for forced_title
     ne.slider.markerF = function ()
-        local duration = mp.get_property_number("duration", nil)
+        local duration = mp.get_property_number("duration")
         if duration ~= nil then
             local chapters = mp.get_property_native("chapter-list", {})
             local markers = {}
@@ -2106,9 +2118,9 @@ local function osc_init()
         end
     end
     ne.slider.posF =
-        function () return mp.get_property_number("percent-pos", nil) end
+        function () return mp.get_property_number("percent-pos") end
     ne.slider.tooltipF = function (pos)
-        local duration = mp.get_property_number("duration", nil)
+        local duration = mp.get_property_number("duration")
         if duration ~= nil and pos ~= nil then
             local possec = duration * (pos / 100)
             return mp.format_time(possec)
@@ -2124,7 +2136,7 @@ local function osc_init()
         if not cache_state then
             return nil
         end
-        local duration = mp.get_property_number("duration", nil)
+        local duration = mp.get_property_number("duration")
         if duration == nil or duration <= 0 then
             return nil
         end
@@ -2728,6 +2740,15 @@ local function update_duration_watch()
     end
 end
 
+local function set_tick_delay(_, display_fps)
+    -- may be nil if unavailable or 0 fps is reported
+    if not display_fps or not user_opts.tick_delay_follow_display_fps then
+        tick_delay = user_opts.tick_delay
+        return
+    end
+    tick_delay = 1 / display_fps
+end
+
 mp.register_event("shutdown", shutdown)
 mp.register_event("start-file", request_init)
 mp.observe_property("track-list", "native", request_init)
@@ -2755,37 +2776,29 @@ mp.register_script_message("osc-tracklist", function(dur)
     show_message(table.concat(message, '\n\n'), dur)
 end)
 
-mp.observe_property("fullscreen", "bool",
-    function(_, val)
-        state.fullscreen = val
-        state.marginsREQ = true
-        request_init_resize()
-    end
-)
-mp.observe_property("border", "bool",
-    function(_, val)
-        state.border = val
-        request_init_resize()
-    end
-)
-mp.observe_property("title-bar", "bool",
-    function(_, val)
-        state.title_bar = val
-        request_init_resize()
-    end
-)
-mp.observe_property("window-maximized", "bool",
-    function(_, val)
-        state.maximized = val
-        request_init_resize()
-    end
-)
-mp.observe_property("idle-active", "bool",
-    function(_, val)
-        state.idle = val
-        request_tick()
-    end
-)
+mp.observe_property("fullscreen", "bool", function(_, val)
+    state.fullscreen = val
+    state.marginsREQ = true
+    request_init_resize()
+end)
+mp.observe_property("border", "bool", function(_, val)
+    state.border = val
+    request_init_resize()
+end)
+mp.observe_property("title-bar", "bool", function(_, val)
+    state.title_bar = val
+    request_init_resize()
+end)
+mp.observe_property("window-maximized", "bool", function(_, val)
+    state.maximized = val
+    request_init_resize()
+end)
+mp.observe_property("idle-active", "bool", function(_, val)
+    state.idle = val
+    request_tick()
+end)
+
+mp.observe_property("display-fps", "number", set_tick_delay)
 mp.observe_property("pause", "bool", pause_state)
 mp.observe_property("demuxer-cache-state", "native", cache_state)
 mp.observe_property("vo-configured", "bool", request_tick)
@@ -2977,9 +2990,13 @@ local function validate_user_opts()
 end
 
 -- read options from config and command-line
-opt.read_options(user_opts, "osc", function()
+opt.read_options(user_opts, "osc", function(changed)
     validate_user_opts()
     set_osc_styles()
+    set_time_styles(changed.timetotal, changed.timems)
+    if changed.tick_delay or changed.tick_delay_follow_display_fps then
+        set_tick_delay("display_fps", mp.get_property_number("display_fps"))
+    end
     request_tick()
     visibility_mode(user_opts.visibility, true)
     update_duration_watch()
@@ -2988,6 +3005,8 @@ end)
 
 validate_user_opts()
 set_osc_styles()
+set_time_styles(true, true)
+set_tick_delay("display_fps", mp.get_property_number("display_fps"))
 visibility_mode(user_opts.visibility, true)
 update_duration_watch()
 

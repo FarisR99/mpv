@@ -152,6 +152,7 @@ struct format_hack {
     bool no_pcm_seek : 1;
     bool no_seek_on_no_duration : 1;
     bool readall_on_no_streamseek : 1;
+    bool first_frame_only : 1;
 };
 
 #define BLACKLIST(fmt) {fmt, .ignore = true}
@@ -189,6 +190,10 @@ static const struct format_hack format_hacks[] = {
     // Some Ogg shoutcast streams are essentially concatenated OGG files. They
     // reset timestamps, which causes all sorts of problems.
     {"ogg", .linearize_audio_ts = true, .use_stream_ids = true},
+
+    // Ignore additional metadata as frames from some single frame JPEGs
+    // (e.g. gain map)
+    {"jpeg_pipe", .first_frame_only = true},
 
     // At some point, FFmpeg lost the ability to read gif from unseekable
     // streams.
@@ -465,18 +470,12 @@ static int lavf_check_file(demuxer_t *demuxer, enum demux_check check)
         }
     }
 
-    // HLS streams do not seem to be well tagged, so matching by MIME type is
-    // not enough - we need to strip the query string and match by their
-    // extensions. We also pass jpg filenames to fix issues like #13192 (jpgs
-    // being treated as videos due to a bogus second frame) and #13431 (jpgs
-    // misdetected as mpegts). We don't pass filenames otherwise to not
-    // misdetect files with a wrong extension, as described in 74e62ed2d1.
-    bstr ext = bstr_get_ext(mp_is_url(bstr0(priv->filename))
-                                ? bstr_split(bstr0(priv->filename), "?#", NULL)
-                                : bstr0(priv->filename));
+    // HLS streams seems to be not well tagged, so matching mime type is not
+    // enough. Strip URL parameters and match extension.
+    bstr ext = bstr_get_ext(bstr_split(bstr0(priv->filename), "?#", NULL));
     AVProbeData avpd = {
+        // Disable file-extension matching with normal checks, except for HLS
         .filename = !bstrcasecmp0(ext, "m3u8") || !bstrcasecmp0(ext, "m3u") ||
-                    !bstrcasecmp0(ext, "jpg") || !bstrcasecmp0(ext, "jpeg") ||
                     check <= DEMUX_CHECK_REQUEST ? priv->filename : "",
         .buf_size = 0,
         .buf = av_mallocz(PROBE_BUF_SIZE + AV_INPUT_BUFFER_PADDING_SIZE),
@@ -951,7 +950,7 @@ static int nested_io_open(struct AVFormatContext *s, AVIOContext **pb,
     struct demuxer *demuxer = s->opaque;
     lavf_priv_t *priv = demuxer->priv;
 
-    if (priv->opts->propagate_opts) {
+    if (options && priv->opts->propagate_opts) {
         // Copy av_opts to options, but only entries that are not present in
         // options. (Hope this will break less by not overwriting important
         // settings.)
@@ -1260,6 +1259,12 @@ static bool demux_lavf_read_packet(struct demuxer *demux,
     struct stream_info *info = priv->streams[pkt->stream_index];
     struct sh_stream *stream = info->sh;
     AVStream *st = priv->avfc->streams[pkt->stream_index];
+
+    // Never send additional frames for streams that are a single frame.
+    if (stream->image && priv->format_hack.first_frame_only && pkt->pos != 0) {
+        av_packet_unref(pkt);
+        return true;
+    }
 
     if (!demux_stream_is_selected(stream)) {
         av_packet_unref(pkt);

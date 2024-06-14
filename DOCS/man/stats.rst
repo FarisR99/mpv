@@ -25,6 +25,7 @@ stats:
 2      Show frame timings (scroll)
 3      Input cache stats
 4      Active key bindings (scroll)
+5      Selected Tracks Info (scroll)
 0      Internal stuff (scroll)
 ====   ==================
 
@@ -56,6 +57,8 @@ Configurable Options
     Default: 3
 ``key_page_4``
     Default: 4
+``key_page_5``
+    Default: 5
 ``key_page_0``
     Default: 0
 
@@ -89,6 +92,16 @@ Configurable Options
     displayed stats. When `yes`, displayed stats are persistently shown for the
     respective duration. This can result in overlapping text when multiple
     scripts decide to print text at the same time.
+
+``file_tag_max_length``
+    Default: 128
+
+    Only show file tags shorter than this length, in bytes.
+
+``file_tag_max_count``
+    Default: 16
+
+    Only show the first specified amount of file tags.
 
 ``term_width_limit``
     Default: -1
