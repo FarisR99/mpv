@@ -27,17 +27,6 @@
 #include "context.h"
 #include "ra_d3d11.h"
 
-struct d3d11_opts {
-    int feature_level;
-    int warp;
-    bool flip;
-    int sync_interval;
-    char *adapter_name;
-    int output_format;
-    int color_space;
-    bool exclusive_fs;
-};
-
 #define OPT_BASE_STRUCT struct d3d11_opts
 const struct m_sub_options d3d11_conf = {
     .opts = (const struct m_option[]) {
@@ -84,25 +73,6 @@ const struct m_sub_options d3d11_conf = {
         .color_space = -1,
     },
     .size = sizeof(struct d3d11_opts)
-};
-
-struct priv {
-    struct d3d11_opts *opts;
-    struct m_config_cache *opts_cache;
-
-    struct mp_vo_opts *vo_opts;
-    struct m_config_cache *vo_opts_cache;
-
-    struct ra_tex *backbuffer;
-    ID3D11Device *device;
-    IDXGISwapChain *swapchain;
-    struct pl_color_space swapchain_csp;
-
-    int64_t perf_freq;
-    unsigned last_sync_refresh_count;
-    int64_t last_sync_qpc_time;
-    int64_t vsync_duration_qpc;
-    int64_t last_submit_qpc;
 };
 
 static struct ra_tex *get_backbuffer(struct ra_ctx *ctx)

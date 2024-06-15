@@ -28,13 +28,21 @@
 
 extern const struct offscreen_context offscreen_vk;
 extern const struct offscreen_context offscreen_egl;
+extern const struct offscreen_context offscreen_angle;
+extern const struct offscreen_context offscreen_d3d11;
 
 static const struct offscreen_context *contexts[] = {
+#if HAVE_VULKAN
+    &offscreen_vk,
+#endif
 #if HAVE_EGL
     &offscreen_egl,
 #endif
-#if HAVE_VULKAN
-    &offscreen_vk,
+#if HAVE_EGL_ANGLE_WIN32
+    &offscreen_angle,
+#endif
+#if HAVE_D3D11
+    &offscreen_d3d11,
 #endif
 };
 
