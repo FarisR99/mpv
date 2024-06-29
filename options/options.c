@@ -70,7 +70,6 @@ extern const struct m_sub_options demux_rawvideo_conf;
 extern const struct m_sub_options demux_playlist_conf;
 extern const struct m_sub_options demux_lavf_conf;
 extern const struct m_sub_options demux_mkv_conf;
-extern const struct m_sub_options demux_cue_conf;
 extern const struct m_sub_options vd_lavc_conf;
 extern const struct m_sub_options ad_lavc_conf;
 extern const struct m_sub_options input_config;
@@ -632,7 +631,6 @@ static const m_option_t mp_opts[] = {
 
 #if HAVE_CDDA
     {"cdda", OPT_SUBSTRUCT(stream_cdda_opts, stream_cdda_conf)},
-    {"cdrom-device", OPT_REPLACED("cdda-device")},
 #endif
 
     // demuxer.c - select audio/sub file/demuxer
@@ -684,7 +682,6 @@ static const m_option_t mp_opts[] = {
     {"demuxer-rawvideo", OPT_SUBSTRUCT(demux_rawvideo, demux_rawvideo_conf)},
     {"", OPT_SUBSTRUCT(demux_playlist, demux_playlist_conf)},
     {"demuxer-mkv", OPT_SUBSTRUCT(demux_mkv, demux_mkv_conf)},
-    {"demuxer-cue", OPT_SUBSTRUCT(demux_cue, demux_cue_conf)},
 
 // ------------------------- subtitles options --------------------
 
@@ -737,11 +734,7 @@ static const m_option_t mp_opts[] = {
     {"volume-gain-min", OPT_FLOAT(softvol_gain_min), M_RANGE(-150, 0)},
     {"volume-gain", OPT_FLOAT(softvol_gain), .flags = UPDATE_VOL,
         M_RANGE(-150, 150)},
-    {"mute", OPT_CHOICE(softvol_mute,
-        {"no", 0},
-        {"auto", 0},
-        {"yes", 1}),
-        .flags = UPDATE_VOL},
+    {"mute", OPT_BOOL(softvol_mute), .flags = UPDATE_VOL},
     {"replaygain", OPT_CHOICE(rgain_mode,
         {"no", 0},
         {"track", 1},
@@ -959,7 +952,6 @@ static const m_option_t mp_opts[] = {
     {"", OPT_SUBSTRUCT(encode_opts, encode_config)},
 
     {"play-dir", OPT_REPLACED("play-direction")},
-    {"sub-forced-only", OPT_REPLACED("sub-forced-events-only")},
     {0}
 };
 
@@ -1131,13 +1123,15 @@ static const struct MPOpts mp_default_opts = {
         "sub-delay",
         "sub-speed",
         "sub-pos",
-        "secondary-sub-pos",
         "sub-visibility",
         "sub-scale",
         "sub-use-margins",
         "sub-ass-force-margins",
         "sub-ass-vsfilter-aspect-compat",
         "sub-ass-override",
+        "secondary-sid",
+        "secondary-sub-delay",
+        "secondary-sub-pos",
         "secondary-sub-ass-override",
         "secondary-sub-visibility",
         "ab-loop-a",

@@ -25,6 +25,7 @@
 #include <libavutil/opt.h>
 
 #include "audio/aframe.h"
+#include "audio/chmap_avchannel.h"
 #include "audio/format.h"
 #include "common/av_common.h"
 #include "common/codecs.h"
@@ -36,12 +37,6 @@
 #include "options/options.h"
 
 #define OUTBUF_SIZE 65536
-
-#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(60, 26, 100)
-#define AV_PROFILE_UNKNOWN FF_PROFILE_UNKNOWN
-#define AV_PROFILE_DTS_HD_HRA FF_PROFILE_DTS_HD_HRA
-#define AV_PROFILE_DTS_HD_MA FF_PROFILE_DTS_HD_MA
-#endif
 
 struct spdifContext {
     struct mp_log   *log;
@@ -60,7 +55,7 @@ struct spdifContext {
     struct mp_decoder public;
 };
 
-#if LIBAVCODEC_VERSION_MAJOR < 61
+#if LIBAVFORMAT_VERSION_MAJOR < 61
 static int write_packet(void *p, uint8_t *buf, int buf_size)
 #else
 static int write_packet(void *p, const uint8_t *buf, int buf_size)
@@ -128,7 +123,7 @@ static void determine_codec_params(struct mp_filter *da, AVPacket *pkt,
         av_parser_close(parser);
     }
 
-    if (profile != AV_PROFILE_UNKNOWN || spdif_ctx->codec_id == AV_CODEC_ID_AC3)
+    if (profile != AV_PROFILE_UNKNOWN)
         return;
 
     const AVCodec *codec = avcodec_find_decoder(spdif_ctx->codec_id);
@@ -160,6 +155,7 @@ static void determine_codec_params(struct mp_filter *da, AVPacket *pkt,
         c->codec_profile = avcodec_profile_name(ctx->codec_id, ctx->profile);
     c->codec = ctx->codec_descriptor->name;
     c->codec_desc = ctx->codec_descriptor->long_name;
+    mp_chmap_from_av_layout(&c->channels, &ctx->ch_layout);
 
 done:
     av_frame_free(&frame);
@@ -331,6 +327,7 @@ static void ad_spdif_process(struct mp_filter *da)
         if (init_filter(da) < 0)
             goto done;
         assert(spdif_ctx->avpkt);
+        assert(spdif_ctx->lavf_ctx);
     }
 
     spdif_ctx->out_buffer_len  = 0;

@@ -302,7 +302,9 @@ static struct m_config_option *m_config_get_co_any(const struct m_config *config
 
     const char *prefix = config->is_toplevel ? "--" : "";
     if (co->opt->type == &m_option_type_alias) {
-        const char *alias = (const char *)co->opt->priv;
+        char buf[M_CONFIG_MAX_OPT_NAME_LEN];
+        const char *alias = m_config_shadow_get_alias_from_opt(config->shadow, co->opt_id,
+                                                               buf, sizeof(buf));
         if (co->opt->deprecation_message && !co->warning_was_printed) {
             if (co->opt->deprecation_message[0]) {
                 MP_WARN(config, "Warning: option %s%s was replaced with "
@@ -881,8 +883,12 @@ void m_config_print_option_list(const struct m_config *config, const char *name)
             MP_INFO(config, " [file]");
         if (opt->deprecation_message)
             MP_INFO(config, " [deprecated]");
-        if (opt->type == &m_option_type_alias)
-            MP_INFO(config, " for %s", (char *)opt->priv);
+        if (opt->type == &m_option_type_alias) {
+            char buf[M_CONFIG_MAX_OPT_NAME_LEN];
+            const char *alias = m_config_shadow_get_alias_from_opt(config->shadow, co->opt_id,
+                                                                   buf, sizeof(buf));
+            MP_INFO(config, " for %s", alias);
+        }
         if (opt->type == &m_option_type_cli_alias)
             MP_INFO(config, " for --%s (CLI/config files only)", (char *)opt->priv);
         MP_INFO(config, "\n");
@@ -990,6 +996,11 @@ static struct m_profile *find_check_profile(struct m_config *config, char *name)
 
 int m_config_set_profile(struct m_config *config, char *name, int flags)
 {
+    if ((flags & M_SETOPT_FROM_CONFIG_FILE) && !strcmp(name, "default")) {
+        MP_WARN(config, "Ignoring profile=%s from config file.\n", name);
+        return 0;
+    }
+
     MP_VERBOSE(config, "Applying profile '%s'...\n", name);
     struct m_profile *p = find_check_profile(config, name);
     if (!p)
@@ -1040,7 +1051,7 @@ int m_config_restore_profile(struct m_config *config, char *name)
 void m_config_finish_default_profile(struct m_config *config, int flags)
 {
     struct m_profile *p = m_config_add_profile(config, NULL);
-    m_config_set_profile(config, p->name, flags);
+    m_config_set_profile(config, p->name, flags & ~M_SETOPT_FROM_CONFIG_FILE);
     p->num_opts = 0;
 }
 

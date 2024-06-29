@@ -154,8 +154,16 @@ local function truncate_utf8(str, max_length)
     local len = 0
     local pos = 1
     while pos <= #str do
+        local last_pos = pos
         pos = next_utf8(str, pos)
         len = len + 1
+        if pos > last_pos + 1 then
+            if len == max_length - 1 then
+                pos = prev_utf8(str, pos)
+            else
+                len = len + 1
+            end
+        end
         if len == max_length - 1 then
             return str:sub(1, pos - 1) .. '⋯'
         end
@@ -437,7 +445,8 @@ local function populate_log_with_matches(max_width)
 
     for i = first_match_to_print, last_match_to_print do
         log[#log + 1] = {
-            text = truncate_utf8(matches[i].text, max_width) .. '\n',
+            text = (max_width and truncate_utf8(matches[i].text, max_width)
+                    or matches[i].text) .. '\n',
             style = i == selected_match and styles.selected_suggestion or '',
             terminal_style = i == selected_match and terminal_styles.selected_suggestion or '',
         }
@@ -508,6 +517,8 @@ local function update()
     screenx = screenx / dpi_scale
     screeny = screeny / dpi_scale
 
+    local bottom_left_margin = 6
+
     -- Clear the OSD if the REPL is not active
     if not repl_active then
         mp.set_osd_ass(screenx, screeny, '')
@@ -523,7 +534,8 @@ local function update()
                   '\\1a&H00&\\3a&H00&\\1c&Heeeeee&\\3c&H111111&' ..
                   (has_shadow and '\\4a&H99&\\4c&H000000&' or '') ..
                   '\\fn' .. opts.font .. '\\fs' .. opts.font_size ..
-                  '\\bord' .. opts.border_size .. '\\xshad0\\yshad1\\fsp0\\q1' ..
+                  '\\bord' .. opts.border_size .. '\\xshad0\\yshad1\\fsp0' ..
+                  (selectable_items and '\\q2' or '\\q1') ..
                   '\\clip(' .. clipping_coordinates .. ')}'
     -- Create the cursor glyph as an ASS drawing. ASS will draw the cursor
     -- inline with the surrounding text, but it sets the advance to the width
@@ -546,12 +558,14 @@ local function update()
 
     local lines_max = calculate_max_log_lines()
     -- Estimate how many characters fit in one line
-    local width_max = math.ceil(screenx / opts.font_size * get_font_hw_ratio())
+    local width_max = math.floor((screenx - bottom_left_margin -
+                                  mp.get_property_native('osd-margin-x') * 2 * screeny / 720) /
+                                 opts.font_size * get_font_hw_ratio())
 
     local suggestions, rows = format_table(suggestion_buffer, width_max, lines_max)
     local suggestion_ass = style .. styles.suggestion .. suggestions
 
-    populate_log_with_matches(width_max)
+    populate_log_with_matches()
 
     local log_ass = ''
     local log_buffer = log_buffers[id]
@@ -566,7 +580,7 @@ local function update()
 
     ass:new_event()
     ass:an(1)
-    ass:pos(6, screeny - 6 - global_margins.b * screeny)
+    ass:pos(bottom_left_margin, screeny - bottom_left_margin - global_margins.b * screeny)
     ass:append(log_ass .. '\\N')
     if #suggestions > 0 then
         ass:append(suggestion_ass .. '\\N')
@@ -579,7 +593,7 @@ local function update()
     -- cursor appear in front of the text.
     ass:new_event()
     ass:an(1)
-    ass:pos(6, screeny - 6 - global_margins.b * screeny)
+    ass:pos(bottom_left_margin, screeny - bottom_left_margin - global_margins.b * screeny)
     ass:append(style .. '{\\alpha&HFF&}' .. ass_escape(prompt) .. ' ' .. before_cur)
     ass:append(cglyph)
     ass:append(style .. '{\\alpha&HFF&}' .. after_cur)
@@ -1780,20 +1794,8 @@ mp.register_event('log-message', function(e)
     if e.level == 'trace' then return end
 
     -- Use color for debug/v/warn/error/fatal messages.
-    local style = styles[e.level]
-    local terminal_style = terminal_styles[e.level]
-
-    -- Strip the terminal escape sequence from unselected tracks.
-    if e.prefix == 'cplayer' and e.level == 'info' then
-        local found
-        e.text, found = e.text:gsub('^\027%[38;5;8m', '')
-        if found == 1 then
-            style = styles.disabled
-            terminal_style = terminal_styles.disabled
-        end
-    end
-
-    log_add('[' .. e.prefix .. '] ' .. e.text, style, terminal_style)
+    log_add('[' .. e.prefix .. '] ' .. e.text, styles[e.level],
+            terminal_styles[e.level])
 end)
 
 collectgarbage()

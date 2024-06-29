@@ -113,10 +113,6 @@ static bool init(struct mp_filter *da, struct mp_codec_params *codec,
     if (opts->downmix && mpopts->audio_output_channels.num_chmaps == 1) {
         const struct mp_chmap *requested_layout =
             &mpopts->audio_output_channels.chmaps[0];
-#if !HAVE_AV_CHANNEL_LAYOUT
-        lavc_context->request_channel_layout =
-            mp_chmap_to_lavc(requested_layout);
-#else
         AVChannelLayout av_layout = { 0 };
         mp_chmap_to_av_layout(&av_layout, requested_layout);
 
@@ -126,7 +122,6 @@ static bool init(struct mp_filter *da, struct mp_codec_params *codec,
                             AV_OPT_SEARCH_CHILDREN);
 
         av_channel_layout_uninit(&av_layout);
-#endif
     }
 
     // Always try to set - option only exists for AC3 at the moment
@@ -220,6 +215,7 @@ static int receive_frame(struct mp_filter *da, struct mp_frame *out)
         return ret;
 
     mp_codec_info_from_av(avctx, priv->codec);
+    mp_chmap_from_av_layout(&priv->codec->channels, &avctx->ch_layout);
 
     double out_pts = mp_pts_from_av(priv->avframe->pts, &priv->codec_timebase);
 
@@ -316,6 +312,7 @@ static struct mp_decoder *create(struct mp_filter *parent,
     }
 
     codec->codec_desc = priv->avctx->codec_descriptor->long_name;
+    mp_chmap_from_av_layout(&priv->codec->channels, &priv->avctx->ch_layout);
 
     return &priv->public;
 }

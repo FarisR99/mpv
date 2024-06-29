@@ -8,6 +8,8 @@ project('mpv',
             'buildtype=debugoptimized',
             'b_lundef=false',
             'c_std=c11',
+            'cpp_std=c++20',
+            'cpp_eh=default',
             'warning_level=2',
         ]
 )
@@ -17,12 +19,12 @@ source_root = meson.project_source_root()
 python = find_program('python3')
 
 # ffmpeg
-libavcodec = dependency('libavcodec', version: '>= 58.134.100')
-libavfilter = dependency('libavfilter', version: '>= 7.110.100')
-libavformat = dependency('libavformat', version: '>= 58.76.100')
-libavutil = dependency('libavutil', version: '>= 56.70.100')
-libswresample = dependency('libswresample', version: '>= 3.9.100')
-libswscale = dependency('libswscale', version: '>= 5.9.100')
+libavcodec = dependency('libavcodec', version: '>= 60.31.102')
+libavfilter = dependency('libavfilter', version: '>= 9.12.100')
+libavformat = dependency('libavformat', version: '>= 60.16.100')
+libavutil = dependency('libavutil', version: '>= 58.29.100')
+libswresample = dependency('libswresample', version: '>= 4.12.100')
+libswscale = dependency('libswscale', version: '>= 7.5.100')
 
 libplacebo = dependency('libplacebo', version: '>=6.338.2',
                 default_options: ['default_library=static', 'demos=false'])
@@ -45,8 +47,6 @@ features = {
     'debug': get_option('debug'),
     'ffmpeg': true,
     'gpl': get_option('gpl'),
-    'jpegxl': libavformat.version().version_compare('>= 59.27.100'),
-    'avif-muxer': libavformat.version().version_compare('>= 59.24.100'),
     'libass': true,
     'libplacebo': true,
 }
@@ -57,6 +57,7 @@ sources = files(
     ## Audio
     'audio/aframe.c',
     'audio/chmap.c',
+    'audio/chmap_avchannel.c',
     'audio/chmap_sel.c',
     'audio/decode/ad_lavc.c',
     'audio/decode/ad_spdif.c',
@@ -380,6 +381,7 @@ if get_option('fuzzers')
     endif
     # Adding flags manually until https://github.com/mesonbuild/meson/pull/9825
     flags += ['-fsanitize=address,undefined,fuzzer', '-fno-omit-frame-pointer']
+    flags += ['-DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION']
     link_flags += ['-fsanitize=address,undefined,fuzzer', '-fno-omit-frame-pointer']
 endif
 
@@ -597,13 +599,6 @@ if darwin
     subdir(join_paths('TOOLS', 'osxbundle'))
 endif
 
-
-# misc dependencies
-features += {'av-channel-layout': libavutil.version().version_compare('>= 57.24.100')}
-if features['av-channel-layout']
-    sources += files('audio/chmap_avchannel.c')
-endif
-
 cdda_opt = get_option('cdda').require(
     get_option('gpl'),
     error_message: 'the build is not GPL!',
@@ -667,7 +662,7 @@ if features['libarchive']
                      'stream/stream_libarchive.c')
 endif
 
-libavdevice = dependency('libavdevice', version: '>= 58.13.100', required: get_option('libavdevice'))
+libavdevice = dependency('libavdevice', version: '>= 60.3.100', required: get_option('libavdevice'))
 features += {'libavdevice': libavdevice.found()}
 if features['libavdevice']
     dependencies += libavdevice
@@ -757,11 +752,6 @@ uchardet = dependency('uchardet', required: uchardet_opt)
 features += {'uchardet': uchardet.found()}
 if features['uchardet']
     dependencies += uchardet
-endif
-
-features += {'lavu-uuid': libavutil.version().version_compare('>= 57.27.100')}
-if not features['lavu-uuid']
-    sources += files('misc/uuid.c')
 endif
 
 vapoursynth = dependency('vapoursynth', version: '>= 56', required: get_option('vapoursynth'))
@@ -1364,9 +1354,8 @@ if features['android-media-ndk']
 endif
 
 vulkan_interop = get_option('vulkan-interop').require(
-    features['vulkan'] and vulkan.version().version_compare('>=1.3.238') and
-    libavutil.version().version_compare('>=58.11.100'),
-    error_message: 'Vulkan Interop requires vulkan headers >= 1.3.238, and libavutil >= 58.11.100',
+    features['vulkan'] and vulkan.version().version_compare('>=1.3.238'),
+    error_message: 'Vulkan Interop requires vulkan headers >= 1.3.238',
 )
 features += {'vulkan-interop': vulkan_interop.allowed()}
 if features['vulkan-interop']
@@ -1581,11 +1570,23 @@ if features['cocoa'] and features['swift']
                            'video/out/mac/window.swift')
 endif
 
+macos_10_15_4_features = get_option('macos-10-15-4-features').require(
+    macos_sdk_version.version_compare('>= 10.15.4'),
+    error_message: 'A macos sdk version >= 10.15.4 could not be found!',
+)
+features += {'macos-10-15-4-features': macos_10_15_4_features.allowed()}
+
 macos_11_features = get_option('macos-11-features').require(
     macos_sdk_version.version_compare('>= 11'),
     error_message: 'A macos sdk version >= 11 could not be found!',
 )
 features += {'macos-11-features': macos_11_features.allowed()}
+
+macos_11_3_features = get_option('macos-11-3-features').require(
+    macos_sdk_version.version_compare('>= 11.3'),
+    error_message: 'A macos sdk version >= 11.3 could not be found!',
+)
+features += {'macos-11-3-features': macos_11_3_features.allowed()}
 
 macos_12_features = get_option('macos-12-features').require(
     macos_sdk_version.version_compare('>= 12'),

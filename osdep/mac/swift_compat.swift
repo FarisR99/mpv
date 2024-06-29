@@ -15,6 +15,16 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#if !swift(>=5.7)
+extension NSCondition {
+    func withLock<R>(_ body: () throws -> R) rethrows -> R {
+        self.lock()
+        defer { self.unlock() }
+        return try body()
+    }
+}
+#endif
+
 #if !swift(>=5.0)
 extension Data {
     mutating func withUnsafeMutableBytes<Type>(_ body: (UnsafeMutableRawBufferPointer) throws -> Type) rethrows -> Type {
@@ -31,5 +41,13 @@ extension NSDraggingInfo {
     var draggingPasteboard: NSPasteboard {
         return draggingPasteboard()
     }
+}
+#endif
+
+#if !HAVE_MACOS_12_FEATURES && HAVE_MACOS_11_FEATURES
+@available(macOS 11.0, *)
+extension CGColorSpace {
+    static let itur_2100_HLG: CFString = kCGColorSpaceITUR_2100_HLG
+    static let itur_2100_PQ: CFString = kCGColorSpaceITUR_2100_PQ
 }
 #endif

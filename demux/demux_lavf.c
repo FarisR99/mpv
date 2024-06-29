@@ -228,12 +228,6 @@ struct stream_info {
     double ts_offset;
 };
 
-#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(59, 10, 100)
-    #define HAVE_IO_CLOSE2 1
-#else
-    #define HAVE_IO_CLOSE2 0
-#endif
-
 typedef struct lavf_priv {
     struct stream *stream;
     bool own_stream;
@@ -266,11 +260,7 @@ typedef struct lavf_priv {
     int num_nested;
     int (*default_io_open)(struct AVFormatContext *s, AVIOContext **pb,
                            const char *url, int flags, AVDictionary **options);
-#if HAVE_IO_CLOSE2
     int (*default_io_close2)(struct AVFormatContext *s, AVIOContext *pb);
-#else
-    void (*default_io_close)(struct AVFormatContext *s, AVIOContext *pb);
-#endif
 } lavf_priv_t;
 
 static void update_read_stats(struct demuxer *demuxer)
@@ -613,13 +603,8 @@ static void select_tracks(struct demuxer *demuxer, int start)
 static void export_replaygain(demuxer_t *demuxer, struct sh_stream *sh,
                               AVStream *st)
 {
-#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(60, 15, 100)
     AVPacketSideData *side_data = st->codecpar->coded_side_data;
     int nb_side_data = st->codecpar->nb_coded_side_data;
-#else
-    AVPacketSideData *side_data = st->side_data;
-    int nb_side_data = st->nb_side_data;
-#endif
     for (int i = 0; i < nb_side_data; i++) {
         AVReplayGain *av_rgain;
         struct replaygain_data *rgain;
@@ -688,7 +673,6 @@ static bool is_image(AVStream *st, bool attached_picture, const AVInputFormat *a
     );
 }
 
-#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(60, 15, 100)
 static inline const uint8_t *mp_av_stream_get_side_data(const AVStream *st,
                                                         enum AVPacketSideDataType type)
 {
@@ -698,9 +682,6 @@ static inline const uint8_t *mp_av_stream_get_side_data(const AVStream *st,
                                  type);
     return sd ? sd->data : NULL;
 }
-#else
-#define mp_av_stream_get_side_data(st, type) av_stream_get_side_data(st, type, NULL)
-#endif
 
 static void handle_new_stream(demuxer_t *demuxer, int i)
 {
@@ -714,13 +695,6 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
     switch (codec->codec_type) {
     case AVMEDIA_TYPE_AUDIO: {
         sh = demux_alloc_sh_stream(STREAM_AUDIO);
-
-#if !HAVE_AV_CHANNEL_LAYOUT
-        // probably unneeded
-        mp_chmap_set_unknown(&sh->codec->channels, codec->channels);
-        if (codec->channel_layout)
-            mp_chmap_from_lavc(&sh->codec->channels, codec->channel_layout);
-#else
         if (!mp_chmap_from_av_layout(&sh->codec->channels, &codec->ch_layout)) {
             char layout[128] = {0};
             MP_WARN(demuxer,
@@ -729,7 +703,6 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
                                                layout, 128) < 0 ?
                     "undefined" : layout);
         }
-#endif
 
         sh->codec->samplerate = codec->sample_rate;
         sh->codec->bitrate = codec->bit_rate;
@@ -979,11 +952,7 @@ static int nested_io_open(struct AVFormatContext *s, AVIOContext **pb,
     return r;
 }
 
-#if HAVE_IO_CLOSE2
 static int nested_io_close2(struct AVFormatContext *s, AVIOContext *pb)
-#else
-static void nested_io_close(struct AVFormatContext *s, AVIOContext *pb)
-#endif
 {
     struct demuxer *demuxer = s->opaque;
     lavf_priv_t *priv = demuxer->priv;
@@ -995,11 +964,7 @@ static void nested_io_close(struct AVFormatContext *s, AVIOContext *pb)
         }
     }
 
-#if HAVE_IO_CLOSE2
     return priv->default_io_close2(s, pb);
-#else
-    priv->default_io_close(s, pb);
-#endif
 }
 
 static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
@@ -1089,13 +1054,8 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
     if (demuxer->access_references) {
         priv->default_io_open = avfc->io_open;
         avfc->io_open = nested_io_open;
-#if HAVE_IO_CLOSE2
         priv->default_io_close2 = avfc->io_close2;
         avfc->io_close2 = nested_io_close2;
-#else
-        priv->default_io_close = avfc->io_close;
-        avfc->io_close = nested_io_close;
-#endif
     } else {
         avfc->io_open = block_io_open;
     }
@@ -1260,15 +1220,15 @@ static bool demux_lavf_read_packet(struct demuxer *demux,
     struct sh_stream *stream = info->sh;
     AVStream *st = priv->avfc->streams[pkt->stream_index];
 
+    if (!demux_stream_is_selected(stream)) {
+        av_packet_unref(pkt);
+        return true; // don't signal EOF if skipping a packet
+    }
+
     // Never send additional frames for streams that are a single frame.
     if (stream->image && priv->format_hack.first_frame_only && pkt->pos != 0) {
         av_packet_unref(pkt);
         return true;
-    }
-
-    if (!demux_stream_is_selected(stream)) {
-        av_packet_unref(pkt);
-        return true; // don't signal EOF if skipping a packet
     }
 
     struct demux_packet *dp = new_demux_packet_from_avpacket(pkt);

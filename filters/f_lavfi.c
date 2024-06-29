@@ -477,11 +477,7 @@ static bool init_pads(struct lavfi *c)
             params->sample_rate = mp_aframe_get_rate(fmt);
             struct mp_chmap chmap = {0};
             mp_aframe_get_chmap(fmt, &chmap);
-#if !HAVE_AV_CHANNEL_LAYOUT
-            params->channel_layout = mp_chmap_to_lavc(&chmap);
-#else
             mp_chmap_to_av_layout(&params->ch_layout, &chmap);
-#endif
             pad->timebase = (AVRational){1, mp_aframe_get_rate(fmt)};
             filter_name = "abuffer";
         } else if (pad->type == MP_FRAME_VIDEO) {
@@ -908,6 +904,9 @@ struct mp_lavfi *mp_lavfi_create_graph(struct mp_filter *parent,
                                        char *hwdec_interop,
                                        char **graph_opts, const char *graph)
 {
+    if (!graph)
+        return NULL;
+
     struct lavfi *c = lavfi_alloc(parent);
     if (!c)
         return NULL;
@@ -980,13 +979,8 @@ static struct mp_filter *lavfi_create(struct mp_filter *parent, void *options)
 // Does it have exactly one video input and one video output?
 static bool is_usable(const AVFilter *filter, int media_type)
 {
-#if LIBAVFILTER_VERSION_INT >= AV_VERSION_INT(8, 3, 0)
     int nb_inputs  = avfilter_filter_pad_count(filter, 0),
         nb_outputs = avfilter_filter_pad_count(filter, 1);
-#else
-    int nb_inputs  = avfilter_pad_count(filter->inputs),
-        nb_outputs = avfilter_pad_count(filter->outputs);
-#endif
     if (nb_inputs > 1 || nb_outputs > 1)
         return false;
     bool input_ok = filter->flags & AVFILTER_FLAG_DYNAMIC_INPUTS;
@@ -1036,11 +1030,7 @@ static const char *get_avopt_type_name(enum AVOptionType type)
     case AV_OPT_TYPE_VIDEO_RATE:        return "fps";
     case AV_OPT_TYPE_DURATION:          return "duration";
     case AV_OPT_TYPE_COLOR:             return "color";
-#if LIBAVUTIL_VERSION_MAJOR < 59
-    case AV_OPT_TYPE_CHANNEL_LAYOUT:    return "ch_layout";
-#else
     case AV_OPT_TYPE_CHLAYOUT:          return "ch_layout";
-#endif
     case AV_OPT_TYPE_BOOL:              return "bool";
     case AV_OPT_TYPE_CONST: // fallthrough
     default:
