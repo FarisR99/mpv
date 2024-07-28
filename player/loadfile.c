@@ -252,7 +252,7 @@ static void print_stream(struct MPContext *mpctx, struct track *t, bool indent)
     const char *langopt = "?";
     switch (t->type) {
     case STREAM_VIDEO:
-        tname = "Video"; selopt = "vid"; langopt = "vlang";
+        tname = t->image ? "Image" : "Video"; selopt = "vid"; langopt = "vlang";
         break;
     case STREAM_AUDIO:
         tname = "Audio"; selopt = "aid"; langopt = "alang";
@@ -299,8 +299,10 @@ static void print_stream(struct MPContext *mpctx, struct track *t, bool indent)
         if (s && s->codec->samplerate)
             APPEND(b, " %d Hz", s->codec->samplerate);
     }
-    if (s && s->hls_bitrate > 0)
-        APPEND(b, " %d kbps", (s->hls_bitrate + 500) / 1000);
+    if (s && s->codec->bitrate)
+        APPEND(b, " %d kbps", (s->codec->bitrate + 500) / 1000);
+    if (s && s->hls_bitrate)
+        APPEND(b, " %d HLS kbps", (s->hls_bitrate + 500) / 1000);
     APPEND(b, ")");
 
     bool first = true;
@@ -308,12 +310,12 @@ static void print_stream(struct MPContext *mpctx, struct track *t, bool indent)
         ADD_FLAG(b, "default", first);
     if (t->forced_track)
         ADD_FLAG(b, "forced", first);
-    if (t->attached_picture)
-        ADD_FLAG(b, "picture", first);
+    if (t->dependent_track)
+        ADD_FLAG(b, "dependent", first);
     if (t->visual_impaired_track)
-        ADD_FLAG(b, "visual_impaired", first);
+        ADD_FLAG(b, "visual-impaired", first);
     if (t->hearing_impaired_track)
-        ADD_FLAG(b, "hearing_impaired", first);
+        ADD_FLAG(b, "hearing-impaired", first);
     if (t->is_external)
         ADD_FLAG(b, "external", first);
     if (!first)
@@ -1212,6 +1214,18 @@ static void start_open(struct MPContext *mpctx, char *url, int url_flags,
     mpctx->open_url_flags = url_flags;
     mpctx->open_for_prefetch = for_prefetch && mpctx->opts->demuxer_thread;
 
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    // Don't allow to open local paths or stdin during fuzzing
+    bstr open_url = bstr0(mpctx->open_url);
+    if (bstr_startswith0(open_url, "/") ||
+        bstr_startswith0(open_url, "./") ||
+        bstr_equals0(open_url, "-"))
+    {
+        cancel_open(mpctx);
+        return;
+    }
+#endif
+
     if (mp_thread_create(&mpctx->open_thread, open_demux_thread, mpctx)) {
         cancel_open(mpctx);
         return;
@@ -1247,6 +1261,10 @@ static void open_demux_reentrant(struct MPContext *mpctx)
     if (!mpctx->open_active)
         start_open(mpctx, url, mpctx->playing->stream_flags, false);
 
+    // If thread failed to start, cancel the playback
+    if (!mpctx->open_active)
+        goto cancel;
+
     // User abort should cancel the opener now.
     mp_cancel_set_parent(mpctx->open_cancel, mpctx->playback_abort);
 
@@ -1265,6 +1283,7 @@ static void open_demux_reentrant(struct MPContext *mpctx)
         mpctx->error_playing = mpctx->open_res_error;
     }
 
+cancel:
     cancel_open(mpctx); // cleanup
 }
 
@@ -1613,6 +1632,11 @@ static void play_current_file(struct MPContext *mpctx)
 
     load_per_file_options(mpctx->mconfig, mpctx->playing->params,
                           mpctx->playing->num_params);
+
+    mpctx->remaining_file_loops = mpctx->opts->loop_file;
+    mp_notify_property(mpctx, "remaining-file-loops");
+    mpctx->remaining_ab_loops = mpctx->opts->ab_loop_count;
+    mp_notify_property(mpctx, "remaining-ab-loops");
 
     mpctx->max_frames = opts->play_frames;
 

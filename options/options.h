@@ -28,13 +28,19 @@ typedef struct mp_vo_opts {
     char *fsscreen_name;
     char *winname;
     char *appid;
-    int content_type;
     int x11_netwm;
     int x11_bypass_compositor;
     int x11_present;
     bool x11_wid_title;
     bool cursor_passthrough;
     bool native_keyrepeat;
+
+    int wl_configure_bounds;
+    int wl_content_type;
+    bool wl_disable_vsync;
+    int wl_edge_pixels_pointer;
+    int wl_edge_pixels_touch;
+    bool wl_present;
 
     float panscan;
     float zoom;
@@ -143,7 +149,7 @@ struct mp_osd_render_opts {
     float osd_bar_align_y;
     float osd_bar_w;
     float osd_bar_h;
-    float osd_bar_border_size;
+    float osd_bar_outline_size;
     float osd_scale;
     bool osd_scale_by_window;
     struct osd_style_opts *osd_style;
@@ -334,7 +340,7 @@ typedef struct MPOpts {
     char **audiofile_auto_exts;
     int coverart_auto;
     char **coverart_auto_exts;
-    bool coverart_whitelist;
+    char **coverart_whitelist;
     bool osd_bar_visible;
 
     int w32_priority;
@@ -381,7 +387,6 @@ typedef struct MPOpts {
     struct d3d11va_opts *d3d11va_opts;
     struct macos_opts *macos_opts;
     struct drm_opts *drm_opts;
-    struct wayland_opts *wayland_opts;
     struct wingl_opts *wingl_opts;
     struct cuda_opts *cuda_opts;
     struct dvd_opts *dvd_opts;

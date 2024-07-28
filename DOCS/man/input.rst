@@ -590,7 +590,7 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
 
 ``subprocess``
     Similar to ``run``, but gives more control about process execution to the
-    caller, and does does not detach the process.
+    caller, and does not detach the process.
 
     You can avoid blocking until the process terminates by running this command
     asynchronously. (For example ``mp.command_native_async()`` in Lua scripting.)
@@ -2142,6 +2142,18 @@ Property list
     ``playback-time/full``
         ``playback-time`` with milliseconds.
 
+``remaining-file-loops``
+    How many more times the current file is going to be looped. This is
+    initialized from the value of ``--loop-file``. This counts the number of
+    times it causes the player to seek to the beginning of the file, so it is 0
+    the last the time is played. -1 corresponds to infinity.
+
+``remaining-ab-loops``
+    How many more times the current A-B loop is going to be looped, if one is
+    active. This is initialized from the value of ``--ab-loop-count``. This
+    counts the number of times it causes the player to seek to ``--ab-loop-a``,
+    so it is 0 the last the time the loop is played. -1 corresponds to infinity.
+
 ``chapter`` (RW)
     Current chapter number. The number of the first chapter is 0.
 
@@ -2258,7 +2270,7 @@ Property list
 ``vf-metadata/<filter-label>``
     Metadata added by video filters. Accessed by the filter label,
     which, if not explicitly specified using the ``@filter-label:`` syntax,
-    will be ``<filter-name>NN``.
+    will be ``<filter-name>.NN``.
 
     Works similar to ``metadata`` property. It allows the same access
     methods (using sub-properties).
@@ -3478,14 +3490,6 @@ Property list
 
     In earlier versions of mpv, these properties returned a static (but bad)
     guess using a completely different method.
-
-``packet-video-bitrate``, ``packet-audio-bitrate``, ``packet-sub-bitrate``
-    Old and deprecated properties for ``video-bitrate``, ``audio-bitrate``,
-    ``sub-bitrate``. They behave exactly the same, but return a value in
-    kilobits. Also, they don't have any OSD formatting, though the same can be
-    achieved with e.g. ``${=video-bitrate}``.
-
-    These properties shouldn't be used anymore.
 
 ``audio-device-list``
     The list of discovered audio devices. This is mostly for use with the

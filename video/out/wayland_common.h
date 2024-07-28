@@ -30,21 +30,11 @@ typedef struct {
     uint64_t modifier;
 } wayland_format;
 
-struct wayland_opts {
-    int configure_bounds;
-    int content_type;
-    bool disable_vsync;
-    int edge_pixels_pointer;
-    int edge_pixels_touch;
-    bool present;
-};
-
 struct vo_wayland_state {
-    struct m_config_cache   *vo_opts_cache;
+    struct m_config_cache   *opts_cache;
     struct mp_log           *log;
-    struct mp_vo_opts       *vo_opts;
+    struct mp_vo_opts       *opts;
     struct vo               *vo;
-    struct wayland_opts     *opts;
     struct wl_callback      *frame_callback;
     struct wl_compositor    *compositor;
     struct wl_subcompositor *subcompositor;
@@ -86,15 +76,15 @@ struct vo_wayland_state {
     int mouse_x;
     int mouse_y;
     int pending_vo_events;
-    double pending_scaling;
-    double scaling;
+    int pending_scaling;   // base 120
+    int scaling;           // base 120
+    double scaling_factor; // wl->scaling divided by 120
     int timeout_count;
     int wakeup_pipe[2];
 
     /* content-type */
-    /* TODO: unvoid these if required wayland protocols is bumped to 1.27+ */
-    void *content_type_manager;
-    void *content_type;
+    struct wp_content_type_manager_v1 *content_type_manager;
+    struct wp_content_type_v1 *content_type;
     int current_content_type;
 
     /* cursor-shape */
@@ -102,9 +92,8 @@ struct vo_wayland_state {
     void *cursor_shape_manager;
 
     /* fractional-scale */
-    /* TODO: unvoid these if required wayland protocols is bumped to 1.31+ */
-    void *fractional_scale_manager;
-    void *fractional_scale;
+    struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
+    struct wp_fractional_scale_v1 *fractional_scale;
 
     /* idle-inhibit */
     struct zwp_idle_inhibit_manager_v1 *idle_inhibit_manager;
@@ -125,8 +114,7 @@ struct vo_wayland_state {
     bool use_present;
 
     /* single-pixel-buffer */
-    /* TODO: unvoid this if required wayland-protocols is bumped to 1.27+ */
-    void *single_pixel_manager;
+    struct wp_single_pixel_buffer_manager_v1 *single_pixel_manager;
 
     /* xdg-decoration */
     struct zxdg_decoration_manager_v1 *xdg_decoration_manager;

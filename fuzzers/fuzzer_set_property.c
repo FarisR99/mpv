@@ -83,6 +83,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     check_error(mpv_set_option_string(ctx, "loop-playlist", "no"));
     check_error(mpv_set_option_string(ctx, "pause", "no"));
     check_error(mpv_set_option_string(ctx, "untimed", "yes"));
+    check_error(mpv_set_option_string(ctx, "sstep", "0"));
 
     mpv_node node = {
         .format = MPV_FORMAT_NODE_ARRAY,
@@ -90,7 +91,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             .num = 1,
             .values = &(mpv_node) {
                 .format = MPV_FORMAT_STRING,
-                .u.string = "av://lavfi:sine=d=0.01",
+                .u.string = "av://lavfi:sine=d=0.1",
             },
         },
     };
@@ -101,17 +102,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     check_error(mpv_set_option(ctx, "external-files", MPV_FORMAT_NODE, &node));
     check_error(mpv_set_option(ctx, "sub-files", MPV_FORMAT_NODE, &node));
 
-    const char *cmd[] = {"loadfile", "av://lavfi:yuvtestsrc=d=0.01", NULL};
+    const char *cmd[] = {"loadfile", "av://lavfi:yuvtestsrc=d=0.1", NULL};
     check_error(mpv_command(ctx, cmd));
 
-    bool loaded = false;
-    while (1) {
-        mpv_event *event = mpv_wait_event(ctx, -1);
-        if (event->event_id == MPV_EVENT_START_FILE)
-            loaded = true;
-        if (loaded && event->event_id == MPV_EVENT_IDLE)
-            break;
-    }
+    player_loop(ctx);
 #endif
 
 done:

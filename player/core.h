@@ -232,6 +232,7 @@ extern const int num_ptracks[STREAM_TYPE_COUNT];
 typedef struct MPContext {
     bool initialized;
     bool is_cli;
+    mp_thread core_thread;
     struct mpv_global *global;
     struct MPOpts *opts;
     struct mp_log *log;
@@ -419,6 +420,9 @@ typedef struct MPContext {
     // Counted down each frame, stop playback if 0 is reached. (-1 = disable)
     int max_frames;
     bool playing_msg_shown;
+
+    int remaining_file_loops;
+    int remaining_ab_loops;
 
     bool paused_for_cache;
     bool demux_underrun;
