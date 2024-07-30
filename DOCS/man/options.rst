@@ -4229,8 +4229,8 @@ Input
     ``--input-ipc-server``, except no socket is created, and instead the passed
     FD is treated like a socket connection received from ``accept()``. In
     practice, you could pass either a FD created by ``socketpair()``, or a pipe.
-    In both cases, you must sure the FD is actually inherited by mpv (do not
-    set the POSIX ``CLOEXEC`` flag).
+    In both cases, you must make sure that the FD is actually inherited by mpv
+    (do not set the POSIX ``CLOEXEC`` flag).
 
     The player quits when the connection is closed.
 
@@ -4243,7 +4243,11 @@ Input
 
     .. note::
 
-        Does not and will not work on Windows.
+        To use this option on Windows, the fd must refer to a wrapped
+        (created by ``_open_osfhandle``) named pipe server handle with a client
+        already connected. The named pipe must be created duplex with overlapped
+        IO and inheritable handles. The program communicates with mpv through
+        the client handle.
 
     .. warning::
 
@@ -7415,6 +7419,13 @@ Miscellaneous
     idle|belownormal|normal|abovenormal|high|realtime
 
     .. warning:: Using realtime priority can cause system lockup.
+
+``--media-controls=<yes|player|no>``
+    (Windows only)
+    Enable integration of media control interface SystemMediaTransportControls.
+    If set to ``player``, only the player will use the controls. Setting it to
+    ``yes`` will also enable the controls for libmpv integrations.
+    (default: ``player``)
 
 ``--force-media-title=<string>``
     Force the contents of the ``media-title`` property to this value. Useful

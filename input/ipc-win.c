@@ -464,6 +464,25 @@ struct mp_ipc_ctx *mp_init_ipc(struct mp_client_api *client_api,
         .client_api = client_api,
     };
 
+    if (opts->ipc_client && opts->ipc_client[0]) {
+        int fd = -1;
+        bstr str = bstr0(opts->ipc_client);
+        if (bstr_eatstart0(&str, "fd://") && str.len) {
+            long long ll = bstrtoll(str, &str, 0);
+            if (!str.len && ll >= 0 && ll <= INT_MAX)
+                fd = ll;
+        }
+        if (fd < 0) {
+            MP_ERR(arg, "Invalid IPC client argument: '%s'\n", opts->ipc_client);
+        } else {
+            HANDLE h = (HANDLE)_get_osfhandle(fd);
+            if (h && h != INVALID_HANDLE_VALUE && (intptr_t)h != -2)
+                ipc_start_client_json(arg, -1, h);
+            else
+                MP_ERR(arg, "Invalid IPC client fd: '%d'\n", fd);
+        }
+    }
+
     if (!opts->ipc_path || !*opts->ipc_path)
         goto out;
 

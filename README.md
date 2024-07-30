@@ -8,4 +8,3 @@ To build it:
 ```shell
 docker compose build . -t mpv:latest
 ```
-
