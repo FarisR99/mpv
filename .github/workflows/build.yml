@@ -36,14 +36,14 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 500M
-      WINE: ${{ matrix.wine }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: i686-w64-mingw32
+            wine: wine32
           - target: x86_64-w64-mingw32
-            wine: wine
+            wine: wine64
     steps:
       - uses: actions/checkout@v4
 
@@ -58,18 +58,11 @@ jobs:
           key: ${{ matrix.target }}-${{ steps.get_time.outputs.timestamp }}
           restore-keys: ${{ matrix.target }}-
 
-      # For LuaJIT build
-      - name: Enable multilib
-        if: ${{ matrix.target == 'i686-w64-mingw32' }}
+      - name: Install dependencies
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y gcc-multilib
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ccache g++-mingw-w64 meson nasm ninja-build pkg-config ${{ matrix.wine }}
+          sudo apt-get install -y ccache g++-mingw-w64 gcc-multilib meson nasm ninja-build pkg-config ${{ matrix.wine }}
 
       - name: Install Meson Wraps
         run: |
@@ -95,14 +88,12 @@ jobs:
           cat ./mingw_build/meson-logs/meson-log.txt
 
       - name: Functional test
-        if: ${{ matrix.wine }}
         run: |
           cd artifact && wine ./mpv.com -v --no-config
         env:
           WINEDEBUG: '+loaddll'
 
       - name: Run meson tests
-        if: ${{ matrix.wine }}
         id: tests
         run: |
           meson test -C mingw_build
@@ -163,7 +154,7 @@ jobs:
           python -m pip install build wheel
           python -m build --wheel --no-isolation meson
           python -m pip install (Get-Item ./meson/dist/meson-*-py3-none-any.whl).FullName
-          choco install ccache
+          choco install ccache nasm
 
       - name: Update Meson WrapDB
         run: |
@@ -417,7 +408,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Test in OpenBSD VM
-      uses: cross-platform-actions/action@v0.24.0
+      uses: cross-platform-actions/action@v0.25.0
       with:
         operating_system: openbsd
         version: '7.5'
@@ -459,10 +450,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Test in FreeBSD VM
-      uses: cross-platform-actions/action@v0.24.0
+      uses: cross-platform-actions/action@v0.25.0
       with:
         operating_system: freebsd
-        version: '14.0'
+        version: '14.1'
         run: |
             sudo pkg update
             sudo pkg install -y \

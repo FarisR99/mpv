@@ -323,6 +323,7 @@ typedef struct MPOpts {
     int audio_output_format;
     int force_srate;
     double playback_speed;
+    double playback_pitch;
     bool pitch_correction;
     struct m_obj_settings *vf_settings;
     struct m_obj_settings *af_settings;
@@ -337,10 +338,11 @@ typedef struct MPOpts {
     int sub_auto;
     char **sub_auto_exts;
     int audiofile_auto;
-    char **audiofile_auto_exts;
+    char **audio_exts;
     int coverart_auto;
-    char **coverart_auto_exts;
+    char **image_exts;
     char **coverart_whitelist;
+    char **video_exts;
     bool osd_bar_visible;
 
     int w32_priority;

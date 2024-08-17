@@ -117,6 +117,7 @@ void playlist_clear(struct playlist *pl)
     pl->current_was_replaced = false;
     pl->playlist_completed = false;
     pl->playlist_started = false;
+    TA_FREEP(&pl->playlist_dir);
 }
 
 void playlist_clear_except_current(struct playlist *pl)
@@ -433,4 +434,25 @@ struct playlist *playlist_parse_file(const char *file, struct mp_cancel *cancel,
 
     talloc_free(log);
     return ret;
+}
+
+void playlist_set_current(struct playlist *pl)
+{
+    if (!pl->playlist_dir)
+        return;
+
+    for (int i = 0; i < pl->num_entries; ++i) {
+        if (!pl->entries[i]->playlist_path)
+            continue;
+        char *path = pl->entries[i]->playlist_path;
+        if (path[0] != '.')
+            path = mp_path_join(NULL, pl->playlist_dir, pl->entries[i]->playlist_path);
+        bool same = !strcmp(pl->entries[i]->filename, path);
+        if (path != pl->entries[i]->playlist_path)
+            talloc_free(path);
+        if (same) {
+            pl->current = pl->entries[i];
+            break;
+        }
+    }
 }

@@ -3549,6 +3549,20 @@ Property list
     The player itself does not use any data in it (although some builtin scripts may).
     The property is not preserved across player restarts.
 
+    The following sub-paths are reserved for internal uses or have special semantics:
+    ``user-data/osc``, ``user-data/mpv``. Unless noted otherwise, the semantics of
+    any properties under these sub-paths can change at any time and may not be relied
+    upon, and writing to these properties may prevent builtin scripts from working
+    properly.
+
+    Currently, the following properties have defined special semantics:
+
+    ``user-data/osc/margins``
+        This property is written by an OSC implementation to indicate the margins that it
+        occupies. Its sub-properties ``l``, ``r``, ``t``, and ``b`` should all be set to
+        the left, right, top, and bottom margins respectively.
+        Values are between 0.0 and 1.0, normalized to window width/height.
+
     Sub-paths can be accessed directly; e.g. ``user-data/my-script/state/a`` can be
     read, written, or observed.
 

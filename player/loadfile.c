@@ -299,10 +299,11 @@ static void print_stream(struct MPContext *mpctx, struct track *t, bool indent)
         if (s && s->codec->samplerate)
             APPEND(b, " %d Hz", s->codec->samplerate);
     }
-    if (s && s->codec->bitrate)
+    if (s && s->codec->bitrate) {
         APPEND(b, " %d kbps", (s->codec->bitrate + 500) / 1000);
-    if (s && s->hls_bitrate)
-        APPEND(b, " %d HLS kbps", (s->hls_bitrate + 500) / 1000);
+    } else if (s && s->hls_bitrate) {
+        APPEND(b, " %d kbps", (s->hls_bitrate + 500) / 1000);
+    }
     APPEND(b, ")");
 
     bool first = true;
@@ -880,6 +881,7 @@ int mp_add_external_file(struct MPContext *mpctx, char *filename,
     struct demuxer_params params = {
         .is_top_level = true,
         .stream_flags = STREAM_ORIGIN_DIRECT,
+        .allow_playlist_create = false,
     };
 
     switch (filter) {
@@ -1040,6 +1042,9 @@ void prepare_playlist(struct MPContext *mpctx, struct playlist *pl)
     if (opts->playlist_pos >= 0)
         pl->current = playlist_entry_from_index(pl, opts->playlist_pos);
 
+    if (pl->playlist_dir)
+        playlist_set_current(pl);
+
     if (opts->shuffle)
         playlist_shuffle(pl);
 
@@ -1068,6 +1073,7 @@ static void transfer_playlist(struct MPContext *mpctx, struct playlist *pl,
             playlist_remove(mpctx->playlist, mpctx->playlist->current);
         if (new)
             mpctx->playlist->current = new;
+        mpctx->playlist->playlist_dir = talloc_steal(mpctx->playlist, pl->playlist_dir);
     } else {
         MP_WARN(mpctx, "Empty playlist!\n");
     }
@@ -1143,6 +1149,8 @@ static MP_THREAD_VOID open_demux_thread(void *ctx)
         .stream_flags = mpctx->open_url_flags,
         .stream_record = true,
         .is_top_level = true,
+        .allow_playlist_create = mpctx->playlist->num_entries <= 1 &&
+                                 !mpctx->playlist->playlist_dir,
     };
     struct demuxer *demux =
         demux_open_url(mpctx->open_url, &p, mpctx->open_cancel, mpctx->global);
@@ -1218,7 +1226,7 @@ static void start_open(struct MPContext *mpctx, char *url, int url_flags,
     // Don't allow to open local paths or stdin during fuzzing
     bstr open_url = bstr0(mpctx->open_url);
     if (bstr_startswith0(open_url, "/") ||
-        bstr_startswith0(open_url, "./") ||
+        bstr_startswith0(open_url, ".") ||
         bstr_equals0(open_url, "-"))
     {
         cancel_open(mpctx);
@@ -1671,10 +1679,12 @@ static void play_current_file(struct MPContext *mpctx)
     if (!mpctx->demuxer || mpctx->stop_play)
         goto terminate_playback;
 
-    if (mpctx->demuxer->playlist) {
-        if (watch_later)
+    struct playlist *pl = mpctx->demuxer->playlist;
+    if (pl) {
+        // pl->playlist_dir indicates that the playlist was auto-created from
+        // the parent file. In this case, mpctx->filename points to real file.
+        if (watch_later && !pl->playlist_dir)
             mp_delete_watch_later_conf(mpctx, mpctx->filename);
-        struct playlist *pl = mpctx->demuxer->playlist;
         playlist_populate_playlist_path(pl, mpctx->filename);
         if (infinite_playlist_loading_loop(mpctx, pl)) {
             mpctx->stop_play = PT_STOP;
