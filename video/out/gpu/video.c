@@ -911,6 +911,7 @@ static void init_video(struct gl_video *p)
     }
     p->color_swizzle[4] = '\0';
 
+    mp_image_params_restore_dovi_mapping(&p->image_params);
     mp_image_params_guess_csp(&p->image_params);
 
     av_lfg_init(&p->lfg, 1);
@@ -2728,8 +2729,8 @@ static void pass_colormanage(struct gl_video *p, struct pl_color_space src,
             cparams.levels_out = PL_COLOR_LEVELS_FULL;
         p->target_params = (struct mp_image_params){
             .imgfmt_name = p->fbo_format ? p->fbo_format->name : "unknown",
-            .w = p->texture_w,
-            .h = p->texture_h,
+            .w = mp_rect_w(p->dst_rect),
+            .h = mp_rect_h(p->dst_rect),
             .color = dst,
             .repr = {.sys = PL_COLOR_SYSTEM_RGB, .levels = cparams.levels_out},
             .rotate = p->image_params.rotate,

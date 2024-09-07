@@ -324,14 +324,14 @@ Available mpv-only filters are:
         Whether or not to include film grain metadata (default: yes). If
         disabled, any film grain metadata will be stripped from frames.
 
+    ``<chroma-location>``
+        Set the chroma loc of the video. Use
+        ``--vf=format:chroma-location=help`` to list all available modes.
+
     ``<stereo-in>``
         Set the stereo mode the video is assumed to be encoded in. Use
         ``--vf=format:stereo-in=help`` to list all available modes. Check with
         the ``stereo3d`` filter documentation to see what the names mean.
-
-    ``<stereo-out>``
-        Set the stereo mode the video should be displayed as. Takes the
-        same values as the ``stereo-in`` option.
 
     ``<rotate>``
         Set the rotation the video is assumed to be encoded with in degrees.
@@ -687,9 +687,17 @@ Available mpv-only filters are:
             Apply high quality VDPAU scaling (needs capable hardware).
 
 ``d3d11vpp``
-    Direct3D 11 video post processing. Currently requires D3D11 hardware
-    decoding for use.
+    Direct3D 11 video post-processing. Requires a D3D11 context and works best
+    with hardware decoding. Software frames are automatically uploaded to hardware
+    for processing.
 
+    ``format``
+        Convert to the selected image format, e.g., nv12, p010, etc. (default: don't change).
+        Format names can be queried with ``--vf=d3d11vpp=format=help``.
+        Note that only a limited subset is supported, and actual support depends
+        on your hardware. Normally, this shouldn't be changed unless some
+        processing only works with a specific format, in which case it can be
+        selected here.
     ``deint=<yes|no>``
         Whether deinterlacing is enabled (default: no).
     ``scale``

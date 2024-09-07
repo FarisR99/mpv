@@ -79,6 +79,7 @@ struct opts {
     bool interlaced_only;
     int mode;
     int field_parity;
+    int format;
 };
 
 struct priv {
@@ -94,58 +95,17 @@ struct priv {
     ID3D11VideoProcessorEnumerator *vp_enum;
     D3D11_VIDEO_FRAME_FORMAT d3d_frame_format;
 
-    DXGI_FORMAT out_format;
-
     bool require_filtering;
 
     struct mp_image_params params, out_params;
     int c_w, c_h;
 
-    struct mp_image_pool *pool;
+    AVBufferRef *av_device_ref;
+    AVBufferRef *hw_pool;
 
     struct mp_refqueue *queue;
 };
 
-static void release_tex(void *arg)
-{
-    ID3D11Texture2D *texture = arg;
-
-    ID3D11Texture2D_Release(texture);
-}
-
-static struct mp_image *alloc_pool(void *pctx, int fmt, int w, int h)
-{
-    struct mp_filter *vf = pctx;
-    struct priv *p = vf->priv;
-    HRESULT hr;
-
-    ID3D11Texture2D *texture = NULL;
-    D3D11_TEXTURE2D_DESC texdesc = {
-        .Width = w,
-        .Height = h,
-        .Format = p->out_format,
-        .MipLevels = 1,
-        .ArraySize = 1,
-        .SampleDesc = { .Count = 1 },
-        .Usage = D3D11_USAGE_DEFAULT,
-        .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-    };
-    hr = ID3D11Device_CreateTexture2D(p->vo_dev, &texdesc, NULL, &texture);
-    if (FAILED(hr))
-        return NULL;
-
-    struct mp_image *mpi = mp_image_new_custom_ref(NULL, texture, release_tex);
-    MP_HANDLE_OOM(mpi);
-
-    mp_image_setfmt(mpi, IMGFMT_D3D11);
-    mp_image_set_size(mpi, w, h);
-    mpi->params.hw_subfmt = p->out_params.hw_subfmt;
-
-    mpi->planes[0] = (void *)texture;
-    mpi->planes[1] = (void *)(intptr_t)0;
-
-    return mpi;
-}
 
 static void flush_frames(struct mp_filter *vf)
 {
@@ -253,6 +213,10 @@ static int recreate_video_proc(struct mp_filter *vf)
     if (FAILED(hr))
         goto fail;
 
+    int rindex = p->opts->mode ? -1 : 0;
+    if (rindex == 0)
+        goto create;
+
     D3D11_VIDEO_PROCESSOR_CAPS caps;
     hr = ID3D11VideoProcessorEnumerator_GetVideoProcessorCaps(p->vp_enum, &caps);
     if (FAILED(hr))
@@ -261,7 +225,6 @@ static int recreate_video_proc(struct mp_filter *vf)
     MP_VERBOSE(vf, "Found %d rate conversion caps. Looking for caps=0x%x.\n",
                (int)caps.RateConversionCapsCount, p->opts->mode);
 
-    int rindex = -1;
     for (int n = 0; n < caps.RateConversionCapsCount; n++) {
         D3D11_VIDEO_PROCESSOR_RATE_CONVERSION_CAPS rcaps;
         hr = ID3D11VideoProcessorEnumerator_GetVideoProcessorRateConversionCaps
@@ -283,6 +246,7 @@ static int recreate_video_proc(struct mp_filter *vf)
 
     // TODO: so, how do we select which rate conversion mode the processor uses?
 
+create:
     hr = ID3D11VideoDevice_CreateVideoProcessor(p->video_dev, p->vp_enum, rindex,
                                                 &p->video_proc);
     if (FAILED(hr)) {
@@ -336,6 +300,40 @@ fail:
     return -1;
 }
 
+static struct mp_image *alloc_out(struct mp_filter *vf)
+{
+    struct priv *p = vf->priv;
+
+    if (!mp_update_av_hw_frames_pool(&p->hw_pool, p->av_device_ref,
+                                     IMGFMT_D3D11, p->out_params.hw_subfmt,
+                                     p->out_params.w, p->out_params.h, false))
+    {
+        MP_ERR(vf, "Failed to create hw pool\n");
+        return NULL;
+    }
+
+    AVHWFramesContext *hw_frame_ctx = (void *)p->hw_pool->data;
+    AVD3D11VAFramesContext *d3d11va_frames_ctx = hw_frame_ctx->hwctx;
+    d3d11va_frames_ctx->BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+
+    AVFrame *av_frame = av_frame_alloc();
+    MP_HANDLE_OOM(av_frame);
+    if (av_hwframe_get_buffer(p->hw_pool, av_frame, 0) < 0) {
+        MP_ERR(vf, "Failed to allocate frame from hw pool\n");
+        av_frame_free(&av_frame);
+        return NULL;
+    }
+
+    struct mp_image *img = mp_image_from_av_frame(av_frame);
+    av_frame_free(&av_frame);
+    if (!img) {
+        MP_ERR(vf, "Internal error when converting AVFrame\n");
+        return NULL;
+    }
+
+    return img;
+}
+
 static struct mp_image *render(struct mp_filter *vf)
 {
     struct priv *p = vf->priv;
@@ -344,7 +342,7 @@ static struct mp_image *render(struct mp_filter *vf)
     ID3D11VideoProcessorInputView *in_view = NULL;
     ID3D11VideoProcessorOutputView *out_view = NULL;
     struct mp_image *in = NULL, *out = NULL;
-    out = mp_image_pool_get(p->pool, IMGFMT_D3D11, p->out_params.w, p->out_params.h);
+    out = alloc_out(vf);
     if (!out) {
         MP_WARN(vf, "failed to allocate frame\n");
         goto cleanup;
@@ -455,7 +453,7 @@ static void vf_d3d11vpp_process(struct mp_filter *vf)
 
     struct mp_image *in_fmt = mp_refqueue_execute_reinit(p->queue);
     if (in_fmt) {
-        mp_image_pool_clear(p->pool);
+        av_buffer_unref(&p->hw_pool);
 
         destroy_video_proc(vf);
 
@@ -470,8 +468,8 @@ static void vf_d3d11vpp_process(struct mp_filter *vf)
         p->out_params.crop.y0 = lrintf(p->opts->scale * p->out_params.crop.y0);
         p->out_params.crop.y1 = lrintf(p->opts->scale * p->out_params.crop.y1);
 
-        p->out_params.hw_subfmt = IMGFMT_NV12;
-        p->out_format = DXGI_FORMAT_NV12;
+        if (p->opts->format)
+            p->out_params.hw_subfmt = p->opts->format;
 
         p->require_filtering = p->params.hw_subfmt != p->out_params.hw_subfmt ||
                                p->params.w != p->out_params.w ||
@@ -502,7 +500,8 @@ static void uninit(struct mp_filter *vf)
 
     flush_frames(vf);
     talloc_free(p->queue);
-    talloc_free(p->pool);
+    av_buffer_unref(&p->hw_pool);
+    av_buffer_unref(&p->av_device_ref);
 
     if (p->video_ctx)
         ID3D11VideoContext_Release(p->video_ctx);
@@ -564,7 +563,8 @@ static struct mp_filter *vf_d3d11vpp_create(struct mp_filter *parent,
                                              AV_HWDEVICE_TYPE_D3D11VA);
     if (!hwctx || !hwctx->av_device_ref)
         goto fail;
-    AVHWDeviceContext *avhwctx = (void *)hwctx->av_device_ref->data;
+    p->av_device_ref = av_buffer_ref(hwctx->av_device_ref);
+    AVHWDeviceContext *avhwctx = (void *)p->av_device_ref->data;
     AVD3D11VADeviceContext *d3dctx = avhwctx->hwctx;
 
     p->vo_dev = d3dctx->device;
@@ -585,10 +585,6 @@ static struct mp_filter *vf_d3d11vpp_create(struct mp_filter *parent,
     if (FAILED(hr))
         goto fail;
 
-    p->pool = mp_image_pool_new(f);
-    mp_image_pool_set_allocator(p->pool, alloc_pool, f);
-    mp_image_pool_set_lru(p->pool);
-
     mp_refqueue_add_in_format(p->queue, IMGFMT_D3D11, 0);
 
     mp_refqueue_set_refs(p->queue, 0, 0);
@@ -607,6 +603,7 @@ fail:
 
 #define OPT_BASE_STRUCT struct opts
 static const m_option_t vf_opts_fields[] = {
+    {"format", OPT_IMAGEFORMAT(format)},
     {"deint", OPT_BOOL(deint_enabled)},
     {"scale", OPT_FLOAT(scale)},
     {"scaling-mode", OPT_CHOICE(scaling_mode,

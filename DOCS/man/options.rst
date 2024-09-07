@@ -1691,7 +1691,7 @@ Video
         Works in ``--correct-pts=no`` mode only.
 
 ``--deinterlace=<yes|no|auto>``
-    Enable or disable interlacing (default: no).
+    Enable or disable deinterlacing (default: no).
     Interlaced video shows ugly comb-like artifacts, which are visible on
     fast movement. Enabling this typically inserts the bwdif video filter in
     order to deinterlace the video, or lets the video output apply deinterlacing
@@ -1708,7 +1708,7 @@ Video
     it's not actually interlaced.
 
 ``--deinterlace-field-parity=<tff|bff|auto>``
-    Specify the field parity/order when deinterlacing(default: auto)
+    Specify the field parity/order when deinterlacing (default: auto).
     Each frame of an interlaced video is divided into two fields, which are
     then separately transmitted. Top field represents even lines while bottom
     field represents odd lines. When deinterlacing the deinterlacer needs to
@@ -1755,7 +1755,7 @@ Video
     You can get the list of allowed codecs with ``mpv --vd=help``. Remove the
     prefix, e.g. instead of ``lavc:h264`` use ``h264``.
 
-    By default, this is set to ``h264,vc1,hevc,vp8,vp9,av1``. Note that
+    By default, this is set to ``h264,vc1,hevc,vp8,vp9,av1,prores``. Note that
     the hardware acceleration special codecs like ``h264_vdpau`` are not
     relevant anymore, and in fact have been removed from FFmpeg in this form.
 

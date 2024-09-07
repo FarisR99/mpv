@@ -170,6 +170,7 @@ jobs:
         run: |
           $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -ne 'C:\Program Files\LLVM\bin' -and `
                                                              $_ -ne 'C:\Strawberry\c\bin' }) -join ';'
+          $env:PATH += ';C:\Program Files\NASM'
           Import-Module "$env:VS\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
           Enter-VsDevShell -VsInstallPath $env:VS -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64"
           ./ci/build-win32.ps1
@@ -288,6 +289,7 @@ jobs:
       env:
         CC: "${{ matrix.config.cc }}"
         CXX: "${{ matrix.config.cxx }}"
+        ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_summary=1:detect_leaks=0"
     strategy:
       matrix:
         config:
