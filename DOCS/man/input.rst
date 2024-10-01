@@ -2733,6 +2733,15 @@ Property list
     ``video-frame-info/repeat``
         Whether the frame must be delayed when decoding.
 
+    ``video-frame-info/gop-timecode``
+        String with the GOP timecode encoded in the frame.
+
+    ``video-frame-info/smpte-timecode``
+        String with the SMPTE timecode encoded in the frame.
+
+    ``video-frame-info/estimated-smpte-timecode``
+        Estimated timecode based on the current playback position and frame count.
+
 ``container-fps``
     Container FPS. This can easily contain bogus values. For videos that use
     modern container formats or video codecs, this will often be incorrect.
@@ -3572,6 +3581,19 @@ Property list
     representation. If converting a leaf-level object (i.e. not a map or array)
     and not using raw mode, the underlying content will be given (e.g. strings will be
     printed directly, rather than quoted and JSON-escaped).
+
+    ``user-data/mpv/ytdl``
+        Data shared by the builtin ytdl hook script.
+
+        ``user-data/mpv/ytdl/path``
+            Path to the ytdl executable, if found, or an empty string otherwise.
+            The property is not set until the script attempts to find the ytdl
+            executable, i.e. until an URL is being loaded by the script.
+
+        ``user-data/mpv/ytdl/json-subprocess-result``
+            Result of executing ytdl to retrieve the JSON data of the URL being
+            loaded. The format is the same as ``subprocess``'s result, capturing
+            stdout and stderr.
 
 ``menu-data`` (RW)
     This property stores the raw menu definition. See `Context Menu`_ section for details.

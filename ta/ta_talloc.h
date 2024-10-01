@@ -50,6 +50,7 @@
 #define talloc_strndup                  ta_xstrndup
 #define talloc_asprintf                 ta_xasprintf
 #define talloc_vasprintf                ta_xvasprintf
+#define talloc_replace                  ta_replace
 
 // Don't define linker-level symbols, as that would clash with real libtalloc.
 #define talloc_strdup_append            ta_talloc_strdup_append
@@ -61,7 +62,6 @@
 #define talloc_asprintf_append          ta_talloc_asprintf_append
 #define talloc_asprintf_append_buffer   ta_talloc_asprintf_append_buffer
 
-char *ta_talloc_strdup(void *t, const char *p);
 char *ta_talloc_strdup_append(char *s, const char *a);
 char *ta_talloc_strdup_append_buffer(char *s, const char *a);
 

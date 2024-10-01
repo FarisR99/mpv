@@ -1907,13 +1907,13 @@ static const struct pl_filter_config *map_scaler(struct priv *p,
 
     const struct gl_video_opts *opts = p->opts_cache->opts;
     const struct scaler_config *cfg = &opts->scaler[unit];
-    if (unit == SCALER_DSCALE && (!cfg->kernel.name || !cfg->kernel.name[0]))
+    if (cfg->kernel.function == SCALER_INHERIT)
         cfg = &opts->scaler[SCALER_SCALE];
-    if (unit == SCALER_CSCALE && (!cfg->kernel.name || !cfg->kernel.name[0]))
-        cfg = &opts->scaler[SCALER_SCALE];
+    const char *kernel_name = m_opt_choice_str(cfg->kernel.functions,
+                                               cfg->kernel.function);
 
     for (int i = 0; fixed_presets[i].name; i++) {
-        if (strcmp(cfg->kernel.name, fixed_presets[i].name) == 0)
+        if (strcmp(kernel_name, fixed_presets[i].name) == 0)
             return fixed_presets[i].filter;
     }
 
@@ -1921,9 +1921,9 @@ static const struct pl_filter_config *map_scaler(struct priv *p,
     struct scaler_params *par = &p->scalers[unit];
     const struct pl_filter_preset *preset;
     const struct pl_filter_function_preset *fpreset;
-    if ((preset = pl_find_filter_preset(cfg->kernel.name))) {
+    if ((preset = pl_find_filter_preset(kernel_name))) {
         par->config = *preset->filter;
-    } else if ((fpreset = pl_find_filter_function_preset(cfg->kernel.name))) {
+    } else if ((fpreset = pl_find_filter_function_preset(kernel_name))) {
         par->config = (struct pl_filter_config) {
             .kernel = fpreset->function,
             .params[0] = fpreset->function->params[0],
@@ -1931,12 +1931,13 @@ static const struct pl_filter_config *map_scaler(struct priv *p,
         };
     } else {
         MP_ERR(p, "Failed mapping filter function '%s', no libplacebo analog?\n",
-               cfg->kernel.name);
+               kernel_name);
         return &pl_filter_bilinear;
     }
 
     const struct pl_filter_function_preset *wpreset;
-    if ((wpreset = pl_find_filter_function_preset(cfg->window.name))) {
+    if ((wpreset = pl_find_filter_function_preset(
+             m_opt_choice_str(cfg->window.functions, cfg->window.function)))) {
         par->config.window = wpreset->function;
         par->config.wparams[0] = wpreset->function->params[0];
         par->config.wparams[1] = wpreset->function->params[1];
@@ -1950,6 +1951,8 @@ static const struct pl_filter_config *map_scaler(struct priv *p,
     }
 
     par->config.clamp = cfg->clamp;
+    if (cfg->antiring > 0.0)
+        par->config.antiring = cfg->antiring;
     if (cfg->kernel.blur > 0.0)
         par->config.blur = cfg->kernel.blur;
     if (cfg->kernel.taper > 0.0)
@@ -1959,7 +1962,7 @@ static const struct pl_filter_config *map_scaler(struct priv *p,
             par->config.radius = cfg->radius;
         } else {
             MP_WARN(p, "Filter radius specified but filter '%s' is not "
-                    "resizable, ignoring\n", cfg->kernel.name);
+                    "resizable, ignoring\n", kernel_name);
         }
     }
 
@@ -2028,8 +2031,7 @@ static void update_icc_opts(struct priv *p, const struct mp_icc_opts *opts)
     update_icc(p, icc);
 
     // Update cached path
-    talloc_free(p->icc_path);
-    p->icc_path = talloc_strdup(p, opts->profile);
+    talloc_replace(p, p->icc_path, opts->profile);
 }
 
 static void update_lut(struct priv *p, struct user_lut *lut)
@@ -2045,8 +2047,7 @@ static void update_lut(struct priv *p, struct user_lut *lut)
 
     // Update cached path
     pl_lut_free(&lut->lut);
-    talloc_free(lut->path);
-    lut->path = talloc_strdup(p, lut->opt);
+    talloc_replace(p, lut->path, lut->opt);
 
     // Load LUT file
     char *fname = mp_get_user_path(NULL, p->global, lut->path);
@@ -2130,7 +2131,6 @@ static void update_render_options(struct vo *vo)
     struct priv *p = vo->priv;
     pl_options pars = p->pars;
     const struct gl_video_opts *opts = p->opts_cache->opts;
-    pars->params.antiringing_strength = opts->scaler[0].antiring;
     pars->params.background_color[0] = opts->background_color.r / 255.0;
     pars->params.background_color[1] = opts->background_color.g / 255.0;
     pars->params.background_color[2] = opts->background_color.b / 255.0;

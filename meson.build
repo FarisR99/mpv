@@ -2,7 +2,7 @@ project('mpv',
         'c',
         license: ['GPL2+', 'LGPL2.1+'],
         version: files('./MPV_VERSION'),
-        meson_version: '>=0.62.0',
+        meson_version: '>=1.3.0',
         default_options: [
             'backend_max_links=16',
             'buildtype=debugoptimized',
@@ -497,17 +497,15 @@ endif
 
 features += {'win32-desktop': win32 and not uwp.found()}
 if features['win32-desktop']
-    pathcch = cc.find_library('pathcch', required: false)
-    features += {'pathcch': pathcch.found()}
-    if features['pathcch']
-        dependencies += pathcch
-    endif
     win32_desktop_libs = [cc.find_library('avrt'),
                           cc.find_library('dwmapi'),
                           cc.find_library('gdi32'),
                           cc.find_library('imm32'),
                           cc.find_library('ntdll'),
                           cc.find_library('ole32'),
+                          cc.find_library('pathcch'),
+                          cc.find_library('shcore'),
+                          cc.find_library('user32'),
                           cc.find_library('uuid'),
                           cc.find_library('uxtheme'),
                           cc.find_library('version')]
@@ -530,8 +528,11 @@ if not posix and not features['win32-desktop']
                      'osdep/terminal-dummy.c')
 endif
 
+# media controls
 if win32
     subdir('osdep/win32')
+else
+    features += {'win32-smtc': false}
 endif
 
 features += {'glob-posix': cc.has_function('glob', prefix: '#include <glob.h>')}
@@ -568,15 +569,7 @@ features += {'bsd-fstatfs': cc.has_function('fstatfs', prefix: '#include <sys/mo
 
 features += {'linux-fstatfs': cc.has_function('fstatfs', prefix: '#include <sys/vfs.h>')}
 
-vector_attribute = '''int main() {
-float v __attribute__((vector_size(32)));
-}
-'''
-vector = get_option('vector').require(
-    cc.compiles(vector_attribute, name: 'vector check'),
-    error_message: 'the compiler does not support gcc vectors!',
-)
-features += {'vector': vector.allowed()}
+features += {'vector': cc.has_function_attribute('vector_size', required: get_option('vector'))}
 
 sources += path_source + timer_source
 
@@ -602,7 +595,8 @@ sources += [ebml_defs, ebml_types]
 
 subdir('common')
 subdir('etc')
-subdir('player')
+subdir('player/javascript')
+subdir('player/lua')
 subdir('sub')
 
 if darwin
@@ -1010,7 +1004,6 @@ if features['d3d11']
                      'video/out/d3d11/ra_d3d11.c',
                      'video/filter/vf_gpu_d3d11.c')
     features += {'dxgi-debug-d3d11': cc.has_header_symbol('d3d11sdklayers.h', 'DXGI_DEBUG_D3D11')}
-    features += {'dxgi-debug': cc.has_header_symbol('dxgidebug.h', 'IID_IDXGIInfoQueue')}
 endif
 
 wayland = {
@@ -1284,10 +1277,11 @@ vulkan_opt = get_option('vulkan').require(
     libplacebo.get_variable('pl_has_vulkan', default_value: '0') == '1',
     error_message: 'libplacebo compiled without vulkan support!',
 )
-vulkan = dependency('vulkan', version: '>= 1.1.70', required: vulkan_opt)
+# libplacebo/ffmpeg public headers depend on Vulkan 1.3
+vulkan = dependency('vulkan', version: '>= 1.3.238', required: vulkan_opt)
 features += {'vulkan': vulkan.found() and (vulkan.type_name() == 'internal' or
                        cc.has_header_symbol('vulkan/vulkan_core.h',
-                                            'VK_VERSION_1_1',
+                                            'VK_VERSION_1_3',
                                             dependencies: vulkan))}
 if features['vulkan']
     dependencies += vulkan
@@ -1299,6 +1293,7 @@ features += {'vk_khr_display': cc.has_function('vkCreateDisplayPlaneSurfaceKHR',
 if features['vulkan']
     sources += files('video/out/vulkan/context.c',
                      'video/out/vulkan/context_display.c',
+                     'video/out/hwdec/hwdec_vulkan.c',
                      'video/out/vulkan/utils.c',
                      'video/filter/vf_gpu_vulkan.c')
 elif features['vk_khr_display']
@@ -1368,15 +1363,6 @@ features += {'android-media-ndk': android_media_ndk.allowed()}
 if features['android-media-ndk']
     # header only, library is dynamically loaded
     sources += files('video/out/hwdec/hwdec_aimagereader.c')
-endif
-
-vulkan_interop = get_option('vulkan-interop').require(
-    features['vulkan'] and vulkan.version().version_compare('>=1.3.238'),
-    error_message: 'Vulkan Interop requires vulkan headers >= 1.3.238',
-)
-features += {'vulkan-interop': vulkan_interop.allowed()}
-if features['vulkan-interop']
-    sources += files('video/out/hwdec/hwdec_vulkan.c')
 endif
 
 d3d_hwaccel = get_option('d3d-hwaccel').require(
@@ -1703,20 +1689,9 @@ if rst2pdf.found()
 endif
 
 
-if meson.version().version_compare('>= 1.1.0')
-    configuration = meson.build_options()
-else
-    # Arbitrary hardcoded things to pass if the meson version is too
-    # old to have the build_options method.
-    configuration = 'meson configure build ' + '-Dprefix=' + get_option('prefix') + \
-                    ' -Dbuildtype=' + get_option('buildtype') + \
-                    ' -Doptimization=' + get_option('optimization')
-endif
-
-
 # Set config.h
 conf_data = configuration_data()
-conf_data.set_quoted('CONFIGURATION', configuration)
+conf_data.set_quoted('CONFIGURATION', meson.build_options())
 conf_data.set_quoted('DEFAULT_DVD_DEVICE', dvd_device)
 conf_data.set_quoted('DEFAULT_CDROM_DEVICE', cd_device)
 
@@ -1832,8 +1807,7 @@ if get_option('cplayer')
     mpv = executable('mpv', main_fn_source, objects: libmpv.extract_all_objects(recursive: true), dependencies: dependencies,
                      win_subsystem: 'windows', install: true)
 
-    # Older meson versions generate this in the player subdirectory.
-    if win32 and meson.version().version_compare('>= 1.3.0')
+    if win32
         wrapper_sources= 'osdep/win32-console-wrapper.c'
         executable('mpv', wrapper_sources, c_args: '-municode', link_args: '-municode',
                    name_suffix: 'com', install: true)

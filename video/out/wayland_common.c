@@ -46,6 +46,11 @@
 #include "single-pixel-buffer-v1.h"
 #include "fractional-scale-v1.h"
 
+#if HAVE_DRM
+#include <xf86drm.h>
+#include <xf86drmMode.h>
+#endif
+
 #if HAVE_WAYLAND_PROTOCOLS_1_32
 #include "cursor-shape-v1.h"
 #endif
@@ -65,6 +70,11 @@
 // From the fractional scale protocol
 #define WAYLAND_SCALE_FACTOR 120.0
 
+
+enum resizing_constraint {
+    MP_WIDTH_CONSTRAINT = 1,
+    MP_HEIGHT_CONSTRAINT = 2,
+};
 
 static const struct mp_keymap keymap[] = {
     /* Special keys */
@@ -202,9 +212,10 @@ static int spawn_cursor(struct vo_wayland_state *wl);
 static void add_feedback(struct vo_wayland_feedback_pool *fback_pool,
                          struct wp_presentation_feedback *fback);
 static void apply_keepaspect(struct vo_wayland_state *wl, int *width, int *height);
+static void get_planar_drm_formats(struct vo_wayland_state *wl);
 static void get_shape_device(struct vo_wayland_state *wl, struct vo_wayland_seat *s);
 static void guess_focus(struct vo_wayland_state *wl);
-static void handle_key_input(struct vo_wayland_seat *s, uint32_t key, uint32_t state);
+static void handle_key_input(struct vo_wayland_seat *s, uint32_t key, uint32_t state, bool no_emit);
 static void prepare_resize(struct vo_wayland_state *wl);
 static void remove_feedback(struct vo_wayland_feedback_pool *fback_pool,
                             struct wp_presentation_feedback *fback);
@@ -557,7 +568,7 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
                                 uint32_t state)
 {
     struct vo_wayland_seat *s = data;
-    handle_key_input(s, key, state);
+    handle_key_input(s, key, state, false);
 }
 
 static void keyboard_handle_modifiers(void *data, struct wl_keyboard *wl_keyboard,
@@ -576,8 +587,11 @@ static void keyboard_handle_modifiers(void *data, struct wl_keyboard *wl_keyboar
     // Handle keys pressed during the enter event.
     if (s->keyboard_entering) {
         s->keyboard_entering = false;
-        for (int n = 0; n < s->num_keyboard_entering_keys; n++)
-            handle_key_input(s, s->keyboard_entering_keys[n], WL_KEYBOARD_KEY_STATE_PRESSED);
+        // Only handle entering keys if only one key is pressed since
+        // Wayland doesn't guarantee that these keys are in order.
+        if (s->num_keyboard_entering_keys == 1)
+            for (int n = 0; n < s->num_keyboard_entering_keys; n++)
+                handle_key_input(s, s->keyboard_entering_keys[n], WL_KEYBOARD_KEY_STATE_PRESSED, true);
         s->num_keyboard_entering_keys = 0;
     } else if (s->xkb_state && s->mpkey) {
         mp_input_put_key(wl->vo->input_ctx, s->mpkey | MP_KEY_STATE_DOWN | s->mpmod);
@@ -652,9 +666,7 @@ static void data_offer_handle_offer(void *data, struct wl_data_offer *offer,
     int score = mp_event_get_mime_type_score(wl->vo->input_ctx, mime_type);
     if (score > wl->dnd_mime_score && wl->opts->drag_and_drop != -2) {
         wl->dnd_mime_score = score;
-        if (wl->dnd_mime_type)
-            talloc_free(wl->dnd_mime_type);
-        wl->dnd_mime_type = talloc_strdup(wl, mime_type);
+        talloc_replace(wl, wl->dnd_mime_type, mime_type);
         MP_VERBOSE(wl, "Given DND offer with mime type %s\n", wl->dnd_mime_type);
     }
 }
@@ -1037,6 +1049,7 @@ static void handle_toplevel_config(void *data, struct xdg_toplevel *toplevel,
     bool is_maximized = false;
     bool is_fullscreen = false;
     bool is_activated = false;
+    bool is_resizing = false;
     bool is_suspended = false;
     bool is_tiled = false;
     enum xdg_toplevel_state *state;
@@ -1046,6 +1059,7 @@ static void handle_toplevel_config(void *data, struct xdg_toplevel *toplevel,
             is_fullscreen = true;
             break;
         case XDG_TOPLEVEL_STATE_RESIZING:
+            is_resizing = true;
             break;
         case XDG_TOPLEVEL_STATE_ACTIVATED:
             is_activated = true;
@@ -1075,6 +1089,11 @@ static void handle_toplevel_config(void *data, struct xdg_toplevel *toplevel,
 
     if (wl->hidden != is_suspended)
         wl->hidden = is_suspended;
+
+    if (wl->resizing != is_resizing) {
+        wl->resizing = is_resizing;
+        wl->resizing_constraint = 0;
+    }
 
     if (opts->fullscreen != is_fullscreen) {
         wl->state_change = wl->reconfigured;
@@ -1344,12 +1363,18 @@ static void format_table(void *data,
 {
     struct vo_wayland_state *wl = data;
 
+    if (wl->compositor_format_size) {
+        munmap(wl->compositor_format_map, wl->compositor_format_size);
+        wl->compositor_format_map = NULL;
+        wl->compositor_format_size = 0;
+    }
+
     void *map = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
 
     if (map != MAP_FAILED) {
-        wl->format_map = map;
-        wl->format_size = size;
+        wl->compositor_format_map = map;
+        wl->compositor_format_size = size;
     }
 }
 
@@ -1357,23 +1382,63 @@ static void main_device(void *data,
                         struct zwp_linux_dmabuf_feedback_v1 *zwp_linux_dmabuf_feedback_v1,
                         struct wl_array *device)
 {
+    struct vo_wayland_state *wl = data;
+    wl->add_tranche = true;
+
 }
 
 static void tranche_done(void *data,
                          struct zwp_linux_dmabuf_feedback_v1 *zwp_linux_dmabuf_feedback_v1)
 {
+    struct vo_wayland_state *wl = data;
+    wl->add_tranche = false;
 }
 
 static void tranche_target_device(void *data,
                                   struct zwp_linux_dmabuf_feedback_v1 *zwp_linux_dmabuf_feedback_v1,
                                   struct wl_array *device)
 {
+    struct vo_wayland_state *wl = data;
+    // Only use the first tranche device we get.
+    if (wl->add_tranche) {
+        dev_t *id;
+        wl_array_for_each(id, device) {
+            memcpy(&wl->target_device_id, id, sizeof(dev_t));
+            break;
+        }
+        get_planar_drm_formats(wl);
+    }
 }
 
 static void tranche_formats(void *data,
                             struct zwp_linux_dmabuf_feedback_v1 *zwp_linux_dmabuf_feedback_v1,
                             struct wl_array *indices)
 {
+    struct vo_wayland_state *wl = data;
+
+    // Only grab formats from the first tranche and ignore the rest.
+    if (!wl->add_tranche)
+        return;
+
+    // Should never happen.
+    if (!wl->compositor_format_map) {
+        MP_WARN(wl, "Compositor did not send a format and modifier table!\n");
+        return;
+    }
+
+    const compositor_format *formats = wl->compositor_format_map;
+    MP_RESIZE_ARRAY(wl, wl->compositor_formats, indices->size);
+    wl->num_compositor_formats = 0;
+    uint16_t *index;
+    wl_array_for_each(index, indices) {
+        MP_TARRAY_APPEND(wl, wl->compositor_formats, wl->num_compositor_formats,
+                         (struct drm_format) {
+                            formats[*index].format,
+                            formats[*index].modifier,
+                        });
+        MP_DBG(wl, "Compositor supports drm format: '%s(%016" PRIx64 ")'\n",
+               mp_tag_str(formats[*index].format), formats[*index].modifier);
+    }
 }
 
 static void tranche_flags(void *data,
@@ -1552,10 +1617,39 @@ static void apply_keepaspect(struct vo_wayland_state *wl, int *width, int *heigh
     if (!wl->opts->keepaspect)
         return;
 
+    int phys_width = handle_round(wl->scaling, *width);
+    int phys_height = handle_round(wl->scaling, *height);
+
+    // Ensure that the size actually changes before we start trying to actually
+    // calculate anything so the wrong constraint for the rezie isn't choosen.
+    if (wl->resizing && !wl->resizing_constraint &&
+        phys_width == mp_rect_w(wl->geometry) && phys_height == mp_rect_h(wl->geometry))
+        return;
+
+    // We are doing a continuous resize (e.g. dragging with mouse), constrain the
+    // aspect ratio against the height if the change is only in the height
+    // coordinate.
+    if (wl->resizing && !wl->resizing_constraint && phys_width == mp_rect_w(wl->geometry) &&
+        phys_height != mp_rect_h(wl->geometry)) {
+        wl->resizing_constraint = MP_HEIGHT_CONSTRAINT;
+    } else if (!wl->resizing_constraint) {
+        wl->resizing_constraint = MP_WIDTH_CONSTRAINT;
+    }
+
+    if (wl->resizing_constraint == MP_HEIGHT_CONSTRAINT) {
+        MPSWAP(int, *width, *height);
+        MPSWAP(int, wl->reduced_width, wl->reduced_height);
+    }
+
     double scale_factor = (double)*width / wl->reduced_width;
     *width = ceil(wl->reduced_width * scale_factor);
     if (wl->opts->keepaspect_window)
         *height = ceil(wl->reduced_height * scale_factor);
+
+    if (wl->resizing_constraint == MP_HEIGHT_CONSTRAINT) {
+        MPSWAP(int, *width, *height);
+        MPSWAP(int, wl->reduced_width, wl->reduced_height);
+    }
 }
 
 static void free_dnd_data(struct vo_wayland_state *wl)
@@ -1734,6 +1828,109 @@ static char **get_displays_spanned(struct vo_wayland_state *wl)
     return names;
 }
 
+static void get_planar_drm_formats(struct vo_wayland_state *wl)
+{
+#if HAVE_DRM
+    drmDevice *device = NULL;
+    drmModePlaneRes *res = NULL;
+    drmModePlane *plane = NULL;
+
+    if (drmGetDeviceFromDevId(wl->target_device_id, 0, &device) != 0) {
+        MP_WARN(wl, "Unable to get drm device from device id: %s\n", mp_strerror(errno));
+        goto done;
+    }
+
+    // Pick the first path we get and hope for the best.
+    char *path = NULL;
+    for (int i = 0; i < device->available_nodes; ++i) {
+        if (device->nodes[0]) {
+            path = device->nodes[0];
+            break;
+        }
+    }
+
+    if (!path || !path[0]) {
+        MP_WARN(wl, "Unable to find a valid drm device node.\n");
+        goto done;
+    }
+
+    int fd = open(path, O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        MP_WARN(wl, "Unable to open DRM node path '%s': %s\n", path, mp_strerror(errno));
+        goto done;
+    }
+
+    // Need to set this in order to access plane information.
+    if (drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1)) {
+        MP_WARN(wl, "Unable to set DRM atomic cap: %s\n", mp_strerror(errno));
+        goto done;
+    }
+
+    res = drmModeGetPlaneResources(fd);
+    if (!res) {
+        MP_WARN(wl, "Unable to get DRM plane resources: %s\n", mp_strerror(errno));
+        goto done;
+    }
+
+    if (!res->count_planes) {
+        MP_WARN(wl, "No DRM planes were found.\n");
+        goto done;
+    }
+
+    // Only check the formats on the first primary plane we find as a crude guess.
+    int index = -1;
+    for (int i = 0; i < res->count_planes; ++i) {
+        drmModeObjectProperties *props = NULL;
+        props = drmModeObjectGetProperties(fd, res->planes[i], DRM_MODE_OBJECT_PLANE);
+        if (!props) {
+            MP_VERBOSE(wl, "Unable to get DRM plane properties: %s\n", mp_strerror(errno));
+            continue;
+        }
+        for (int j = 0; j < props->count_props; ++j) {
+            drmModePropertyRes *prop = drmModeGetProperty(fd, props->props[j]);
+            if (!prop) {
+                MP_VERBOSE(wl, "Unable to get DRM plane property: %s\n", mp_strerror(errno));
+                continue;
+            }
+            if (strcmp(prop->name, "type") == 0) {
+                for (int k = 0; k < prop->count_values; ++k) {
+                    if (prop->values[k] == DRM_PLANE_TYPE_PRIMARY)
+                        index = i;
+                }
+            }
+            drmModeFreeProperty(prop);
+            if (index > -1)
+                break;
+        }
+        drmModeFreeObjectProperties(props);
+        if (index > -1)
+            break;
+    }
+
+    if (index == -1) {
+        MP_WARN(wl, "Unable to get DRM plane: %s\n", mp_strerror(errno));
+        goto done;
+    }
+
+    plane = drmModeGetPlane(fd, res->planes[index]);
+    wl->num_planar_formats = plane->count_formats;
+
+    if (wl->planar_formats)
+        talloc_free(wl->planar_formats);
+
+    wl->planar_formats = talloc_zero_array(wl, int, wl->num_planar_formats);
+    for (int i = 0; i < wl->num_planar_formats; ++i) {
+        MP_DBG(wl, "DRM primary plane supports drm format: %s\n", mp_tag_str(plane->formats[i]));
+        wl->planar_formats[i] = plane->formats[i];
+    }
+
+done:
+    drmModeFreePlane(plane);
+    drmModeFreePlaneResources(res);
+    drmFreeDevice(&device);
+#endif
+}
+
 static int get_mods(struct vo_wayland_seat *s)
 {
     static char* const mod_names[] = {
@@ -1850,7 +2047,7 @@ static int lookupkey(int key)
 }
 
 static void handle_key_input(struct vo_wayland_seat *s, uint32_t key,
-                             uint32_t state)
+                             uint32_t state, bool no_emit)
 {
     struct vo_wayland_state *wl = s->wl;
 
@@ -1864,6 +2061,9 @@ static void handle_key_input(struct vo_wayland_seat *s, uint32_t key,
     default:
         return;
     }
+
+    if (no_emit)
+        state = state | MP_KEY_STATE_SET_ONLY;
 
     s->keyboard_code = key + 8;
     xkb_keysym_t sym = xkb_state_key_get_one_sym(s->xkb_state, s->keyboard_code);
@@ -1879,16 +2079,16 @@ static void handle_key_input(struct vo_wayland_seat *s, uint32_t key,
             // Assume a modifier was pressed and handle it in the mod event instead.
             // If a modifier is released before a regular key, also release that
             // key to not activate it again by accident.
-            if (state == MP_KEY_STATE_UP) {
+            if (state & MP_KEY_STATE_UP) {
                 s->mpkey = 0;
                 mp_input_put_key(wl->vo->input_ctx, MP_INPUT_RELEASE_ALL);
             }
             return;
         }
     }
-    if (state == MP_KEY_STATE_DOWN)
+    if (state & MP_KEY_STATE_DOWN)
         s->mpkey = mpkey;
-    if (mpkey && state == MP_KEY_STATE_UP)
+    if (mpkey && (state & MP_KEY_STATE_UP))
         s->mpkey = 0;
 }
 
@@ -2886,7 +3086,7 @@ void vo_wayland_uninit(struct vo *vo)
     if (wl->display)
         wl_display_disconnect(wl->display);
 
-    munmap(wl->format_map, wl->format_size);
+    munmap(wl->compositor_format_map, wl->compositor_format_size);
 
     for (int n = 0; n < 2; n++)
         close(wl->wakeup_pipe[n]);

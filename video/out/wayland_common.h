@@ -28,7 +28,12 @@ typedef struct {
     uint32_t format;
     uint32_t padding;
     uint64_t modifier;
-} wayland_format;
+} compositor_format;
+
+struct drm_format {
+    uint32_t format;
+    uint64_t modifier;
+};
 
 struct vo_wayland_state {
     struct m_config_cache   *opts_cache;
@@ -68,6 +73,7 @@ struct vo_wayland_state {
     bool locked_size;
     bool need_rescale;
     bool reconfigured;
+    bool resizing;
     bool scale_configured;
     bool state_change;
     bool tiled;
@@ -79,6 +85,7 @@ struct vo_wayland_state {
     int pending_scaling;   // base 120
     int scaling;           // base 120
     double scaling_factor; // wl->scaling divided by 120
+    int resizing_constraint;
     int timeout_count;
     int wakeup_pipe[2];
 
@@ -100,10 +107,16 @@ struct vo_wayland_state {
     struct zwp_idle_inhibitor_v1 *idle_inhibitor;
 
     /* linux-dmabuf */
+    dev_t target_device_id;
     struct zwp_linux_dmabuf_v1 *dmabuf;
     struct zwp_linux_dmabuf_feedback_v1 *dmabuf_feedback;
-    wayland_format *format_map;
-    uint32_t format_size;
+    bool add_tranche;
+    compositor_format *compositor_format_map;
+    uint32_t compositor_format_size;
+    struct drm_format *compositor_formats;
+    int num_compositor_formats;
+    uint32_t *planar_formats;
+    int num_planar_formats;
 
     /* presentation-time */
     struct wp_presentation  *presentation;

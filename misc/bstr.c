@@ -376,37 +376,36 @@ void bstr_xappend(void *talloc_ctx, bstr *s, bstr append)
     s->start[s->len] = '\0';
 }
 
-void bstr_xappend_asprintf(void *talloc_ctx, bstr *s, const char *fmt, ...)
+int bstr_xappend_asprintf(void *talloc_ctx, bstr *s, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    bstr_xappend_vasprintf(talloc_ctx, s, fmt, ap);
+    int ret = bstr_xappend_vasprintf(talloc_ctx, s, fmt, ap);
     va_end(ap);
+    return ret;
 }
 
 // Exactly as bstr_xappend(), but with a formatted string.
-void bstr_xappend_vasprintf(void *talloc_ctx, bstr *s, const char *fmt,
-                            va_list ap)
+int bstr_xappend_vasprintf(void *talloc_ctx, bstr *s, const char *fmt,
+                           va_list ap)
 {
     int size;
     va_list copy;
     va_copy(copy, ap);
     size_t avail = talloc_get_size(s->start) - s->len;
     char *dest = s->start ? s->start + s->len : NULL;
-    char c;
-    if (avail < 1)
-        dest = &c;
-    size = vsnprintf(dest, MPMAX(avail, 1), fmt, copy);
+    size = vsnprintf(dest, avail, fmt, copy);
     va_end(copy);
 
     if (size < 0)
-        abort();
+        return size;
 
     if (avail < 1 || size + 1 > avail) {
         resize_append(talloc_ctx, s, size + 1);
         vsnprintf(s->start + s->len, size + 1, fmt, ap);
     }
     s->len += size;
+    return size;
 }
 
 bool bstr_case_startswith(struct bstr s, struct bstr prefix)

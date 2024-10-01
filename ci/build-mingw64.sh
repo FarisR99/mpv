@@ -219,8 +219,8 @@ _libplacebo () {
 _libplacebo_mark=lib/libplacebo.dll.a
 
 _freetype () {
-    local ver=2.13.2
-    gettar "https://mirror.netcologne.de/savannah/freetype/freetype-${ver}.tar.xz"
+    local ver=2.13.3
+    gettar "https://download.savannah.gnu.org/releases/freetype/freetype-${ver}.tar.xz"
     builddir freetype-${ver}
     meson setup .. --cross-file "$prefix_dir/crossfile"
     makeplusinstall
@@ -229,7 +229,7 @@ _freetype () {
 _freetype_mark=lib/libfreetype.dll.a
 
 _fribidi () {
-    local ver=1.0.15
+    local ver=1.0.16
     gettar "https://github.com/fribidi/fribidi/releases/download/v${ver}/fribidi-${ver}.tar.xz"
     builddir fribidi-${ver}
     meson setup .. --cross-file "$prefix_dir/crossfile" \
@@ -240,7 +240,7 @@ _fribidi () {
 _fribidi_mark=lib/libfribidi.dll.a
 
 _harfbuzz () {
-    local ver=9.0.0
+    local ver=10.0.1
     gettar "https://github.com/harfbuzz/harfbuzz/releases/download/${ver}/harfbuzz-${ver}.tar.xz"
     builddir harfbuzz-${ver}
     meson setup .. --cross-file "$prefix_dir/crossfile" \

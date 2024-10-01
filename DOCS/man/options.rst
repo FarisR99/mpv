@@ -1352,11 +1352,11 @@ Video
     :rkmpp:     requires ``--vo=gpu`` (some RockChip devices only)
 
     ``auto`` tries to automatically enable hardware decoding using the first
-    available method. This still depends what VO you are using. For example,
-    if you are not using ``--vo=gpu`` or ``--vo=vdpau``, vdpau decoding will
-    never be enabled. Also note that if the first found method doesn't actually
-    work, it will always fall back to software decoding, instead of trying the
-    next method (might matter on some Linux systems).
+    available method. This still depends what VO you are using. See the list
+    above, for which ``--vo`` and ``gpu-context`` is required for a given
+    hwdec. It will go down the list of available hwdecs until one is
+    successfully initialised. If all of them fail, it will fallback to software
+    decoding.
 
     ``auto-safe`` is similar to ``auto``, but allows only whitelisted methods
     that are considered "safe". This is supposed to be a reasonable way to
@@ -2568,31 +2568,37 @@ Subtitles
 
     Default: yes.
 
-``--sub-ass-vsfilter-aspect-compat=<yes|no>``
-    Stretch SSA/ASS subtitles when playing anamorphic videos for compatibility
-    with traditional VSFilter behavior. This switch has no effect when the
-    video is stored with square pixels.
+``--sub-ass-use-video-data=<none|aspect-ratio|all>``
+    Controls which information about the video stream is passed to libass.
+    Any option but ``all`` is incompatible with standard ASS as defined by VSFilter,
+    whose behavior most subtitle scripts and renderers target, including libass.
+    Video stream properties are needed to accurately emulate VSFilter semantics and
+    withholding them will likely result in broken subtitle rendering for most files.
+    It's thus recommended to only change this selectively if required on a per-file basis.
 
-    The renderer historically most commonly used for the SSA/ASS subtitle
-    formats, VSFilter, had questionable behavior that resulted in subtitles
-    being stretched too if the video was stored in anamorphic format that
-    required scaling for display.  This behavior is usually undesirable and
-    newer VSFilter versions may behave differently. However, many existing
-    scripts compensate for the stretching by modifying things in the opposite
-    direction.  Thus, if such scripts are displayed "correctly", they will not
-    appear as intended.  This switch enables emulation of the old VSFilter
-    behavior (undesirable but expected by many existing scripts).
+    :none:  Don't forward any video stream information.
+    :aspect-ratio: Only forward aspect ratio; fallbacks are used for other properties.
+                   This makes behaviour consistent across different video resolutions.
+    :all:   Forward all available information, notably including storage resolution.
 
-    Enabled by default.
+    For certain kinds of broken ASS files which got repurposed across
+    several video resolutions without either setting ``LayoutRes`` headers
+    or adjusting affected effects, it may be desirable to withhold storage resolution
+    information from libass to ensure consistent rendering across resolutions.
+    Among others this affects 3D rotations and blurs.
+    When encountering such files, try setting ``aspect-ratio``.
 
-``--sub-ass-vsfilter-blur-compat=<yes|no>``
-    Scale ``\blur`` tags by video resolution instead of script resolution
-    (enabled by default). This is bug in VSFilter, which according to some,
-    can't be fixed anymore in the name of compatibility.
+    Even more broken files on anamorphic video might also exhibit stretching
+    unless aspect ratio information is also faked, in this case you can try
+    using ``none``. This has never an effect on non-anamorphic video.
 
-    Note that this uses the actual video resolution for calculating the
-    offset scale factor, not what the video filter chain or the video output
-    use.
+    Default: ``all``
+
+``--sub-ass-video-aspect-override=<no|ratio>``
+    Allows passing any arbitrary aspect ratio to libass instead of the video’s
+    actual aspect ratio. Zero or negative aspect ratios are identical to ``no``.
+
+    This has no effect if ``sub-ass-use-video-data`` is set to ``none``.
 
 ``--sub-vsfilter-bidi-compat=<yes|no>``
     Set implicit bidi detection to ``ltr`` instead of ``auto`` to match ASS'

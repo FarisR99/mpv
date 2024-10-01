@@ -929,7 +929,7 @@ static bool recover_and_get_state(struct ao *ao, struct mp_pcm_state *state)
     // Give it a number of chances to recover. This tries to deal with the fact
     // that the API is asynchronous, and to account for some past cargo-cult
     // (where things were retried in a loop).
-    for (int n = 0; n < 10; n++) {
+    for (int n = 0; n <= 10; n++) {
         err = snd_pcm_status(p->alsa, st);
         if (err == -EPIPE) {
             // ALSA APIs can return -EPIPE when an XRUN happens,
@@ -942,6 +942,9 @@ static bool recover_and_get_state(struct ao *ao, struct mp_pcm_state *state)
 
             pcmst = snd_pcm_status_get_state(st);
         }
+
+        if (n == 10)
+            pcmst = SND_PCM_STATE_DISCONNECTED;
 
         if (pcmst == SND_PCM_STATE_PREPARED ||
             pcmst == SND_PCM_STATE_RUNNING ||
@@ -959,7 +962,8 @@ static bool recover_and_get_state(struct ao *ao, struct mp_pcm_state *state)
         case SND_PCM_STATE_XRUN:
         case SND_PCM_STATE_DRAINING:
             err = snd_pcm_prepare(p->alsa);
-            CHECK_ALSA_ERROR("pcm prepare error");
+            if (err < 0)
+                MP_ERR(ao, "pcm prepare error: %s\n", snd_strerror(err));
             continue;
         // Hardware suspend.
         case SND_PCM_STATE_SUSPENDED:

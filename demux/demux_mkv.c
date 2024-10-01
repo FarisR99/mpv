@@ -1680,6 +1680,7 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track)
     sh_v->par_h = p.p_h;
 
     sh_v->stereo_mode = track->stereo_mode;
+    sh_v->repr = track->repr;
     sh_v->color = track->color;
 
     if (track->v_projection_pose_roll) {
@@ -2138,7 +2139,7 @@ static void probe_if_image(demuxer_t *demuxer)
 
         int64_t timecode = -1;
         // Arbitrary restriction on packet reading.
-        for (size_t block = 0; block < 100000; block++) {
+        for (size_t block = 0; block < 10000; block++) {
             if (block >= mkv_d->num_blocks && read_next_block_into_queue(demuxer) != 1)
                 break;
             if (mkv_d->blocks[block].track != track)

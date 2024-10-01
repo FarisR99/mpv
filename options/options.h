@@ -109,10 +109,10 @@ struct mp_subtitle_opts {
     float ass_line_spacing;
     bool ass_use_margins;
     bool sub_use_margins;
-    bool ass_vsfilter_aspect_compat;
     int ass_vsfilter_color_compat;
-    bool ass_vsfilter_blur_compat;
     bool sub_vsfilter_bidi_compat;
+    int ass_use_video_data;
+    double ass_video_aspect;
     bool use_embedded_fonts;
     char **ass_style_override_list;
     char *ass_styles_file;
