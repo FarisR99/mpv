@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
+import fileinput
 import os
 import shutil
-import fileinput
-import dylib_unhell
 import subprocess
 from optparse import OptionParser
 
+import dylib_unhell
+
+
 def bundle_path(binary_name):
-    return "%s.app" % binary_name
+    return f"{binary_name}.app"
 
 def bundle_name(binary_name):
     return os.path.basename(bundle_path(binary_name))
 
 def target_plist(binary_name):
-    return os.path.join(bundle_path(binary_name), 'Contents', 'Info.plist')
+    return os.path.join(bundle_path(binary_name), "Contents", "Info.plist")
 
 def target_directory(binary_name):
-    return os.path.join(bundle_path(binary_name), 'Contents', 'MacOS')
+    return os.path.join(bundle_path(binary_name), "Contents", "MacOS")
 
 def target_binary(binary_name):
     return os.path.join(target_directory(binary_name),
@@ -26,7 +28,7 @@ def copy_bundle(binary_name, src_path):
     if os.path.isdir(bundle_path(binary_name)):
         shutil.rmtree(bundle_path(binary_name))
     shutil.copytree(
-        os.path.join(src_path, 'TOOLS', 'osxbundle', bundle_name(binary_name)),
+        os.path.join(src_path, "TOOLS", "osxbundle", bundle_name(binary_name)),
         bundle_path(binary_name))
 
 def copy_binary(binary_name):
@@ -34,20 +36,21 @@ def copy_binary(binary_name):
 
 def apply_plist_template(plist_file, version):
     for line in fileinput.input(plist_file, inplace=1):
-        print(line.rstrip().replace('${VERSION}', version))
+        print(line.rstrip().replace("${VERSION}", version))
 
 def sign_bundle(binary_name):
-    sign_directories = ['Contents/Frameworks', 'Contents/MacOS']
-    for dir in sign_directories:
-        resolved_dir = os.path.join(bundle_path(binary_name), dir)
+    sign_directories = ["Contents/Frameworks", "Contents/MacOS"]
+    for sign_dir in sign_directories:
+        resolved_dir = os.path.join(bundle_path(binary_name), sign_dir)
         for root, _dirs, files in os.walk(resolved_dir):
             for f in files:
-                subprocess.run(['codesign', '--force', '-s', '-', os.path.join(root, f)])
-    subprocess.run(['codesign', '--force', '-s', '-', bundle_path(binary_name)])
+                path = os.path.join(root, f)
+                subprocess.run(["codesign", "--force", "-s", "-", path])
+    subprocess.run(["codesign", "--force", "-s", "-", bundle_path(binary_name)])
 
 def bundle_version(src_path):
-    version = 'UNKNOWN'
-    version_path = os.path.join(src_path, 'MPV_VERSION')
+    version = "UNKNOWN"
+    version_path = os.path.join(src_path, "MPV_VERSION")
     if os.path.exists(version_path):
         x = open(version_path)
         version = x.read()
@@ -71,7 +74,7 @@ def main():
 
     version = bundle_version(src_path).rstrip()
 
-    print("Creating macOS application bundle (version: %s)..." % version)
+    print(f"Creating macOS application bundle (version: {version})...")
     print("> copying bundle skeleton")
     copy_bundle(binary_name, src_path)
     print("> copying binary")

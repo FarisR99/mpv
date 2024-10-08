@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-from PyQt6 import QtWidgets
-import pyqtgraph as pg
-import sys
 import re
+import sys
+
+import pyqtgraph as pg
+from PyQt6 import QtWidgets
 
 filename = sys.argv[1]
 
@@ -70,13 +71,22 @@ def get_event(event, evtype):
         G.events[event] = e
     return G.events[event]
 
-colors = [(0.0, 0.5, 0.0), (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.75, 0.75, 0), (0.0, 0.75, 0.75), (0.75, 0, 0.75)]
-def mkColor(t):
+colors = [
+    (0.0, 0.5, 0.0),
+    (0.0, 0.0, 1.0),
+    (0.0, 0.0, 0.0),
+    (1.0, 0.0, 0.0),
+    (0.75, 0.75, 0),
+    (0.0, 0.75, 0.75),
+    (0.75, 0, 0.75),
+]
+
+def mk_color(t):
     return pg.mkColor(int(t[0] * 255), int(t[1] * 255), int(t[2] * 255))
 
 SCALE = 1e6 # microseconds to seconds
 
-with open(filename, "r") as file:
+with open(filename) as file:
     for line in file:
         line = line.split("#")[0].strip()
         if not line:
@@ -140,8 +150,8 @@ for e, index in zip(G.sevents, range(len(G.sevents))):
     else:
         e.vals = [(x, y * (m - index) / m) for (x, y) in e.vals]
 
-pg.setConfigOption('background', 'w')
-pg.setConfigOption('foreground', 'k')
+pg.setConfigOption("background", "w")
+pg.setConfigOption("foreground", "k")
 app = QtWidgets.QApplication([])
 win = pg.GraphicsLayoutWidget()
 win.show()
@@ -161,15 +171,15 @@ for cur in ax:
 
 for e in G.sevents:
     cur = ax[1 if e.type == "value" else 0]
-    if not cur in G.curveno:
+    if cur not in G.curveno:
         G.curveno[cur] = 0
-    args = {'name': e.name,'antialias':True}
-    color = mkColor(colors[G.curveno[cur] % len(colors)])
+    args = {"name": e.name,"antialias":True}
+    color = mk_color(colors[G.curveno[cur] % len(colors)])
     if e.type == "event-signal":
-        args['symbol'] = e.marker
-        args['symbolBrush'] = pg.mkBrush(color, width=0)
+        args["symbol"] = e.marker
+        args["symbolBrush"] = pg.mkBrush(color, width=0)
     else:
-        args['pen'] = pg.mkPen(color, width=0)
+        args["pen"] = pg.mkPen(color, width=0)
     G.curveno[cur] += 1
     cur.plot(*zip(*e.vals), **args)
 

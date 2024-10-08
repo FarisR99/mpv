@@ -93,6 +93,7 @@ local history_pos = 1
 local searching_history = false
 local log_buffers = {[id] = {}}
 local key_bindings = {}
+local dont_bind_up_down = false
 local global_margins = { t = 0, b = 0 }
 local input_caller
 
@@ -790,6 +791,11 @@ local function help_command(param)
     log_add(output:sub(1, -2))
 end
 
+local function unbind_mouse()
+    mp.remove_key_binding('_console_mouse_move')
+    mp.remove_key_binding('_console_mbtn_left')
+end
+
 -- Run the current command and clear the line (Enter)
 local function handle_enter()
     if searching_history then
@@ -799,6 +805,7 @@ local function handle_enter()
         cursor = #line + 1
         log_buffers[id] = {}
         update()
+        unbind_mouse()
         return
     end
 
@@ -830,6 +837,46 @@ local function handle_enter()
     end
 
     clear()
+end
+
+local function highlight_hovered_line()
+    local height = mp.get_property_native('osd-height')
+    if height == 0 then
+        return
+    end
+
+    local y = mp.get_property_native('mouse-pos').y - global_margins.t * height
+    -- Calculate how many lines could be printed without decreasing them for
+    -- the input line and OSC.
+    local max_lines = height / mp.get_property_native('display-hidpi-scale')
+    / opts.font_size
+    local clicked_line = math.floor(y / height * max_lines + .5)
+
+    -- Subtract 1 line for "n hidden items" when necessary.
+    local offset = first_match_to_print == 1 and 0 or first_match_to_print - 2
+    max_lines = calculate_max_log_lines()
+
+    if #matches < max_lines then
+        clicked_line = clicked_line - (max_lines - #matches)
+        max_lines = #matches
+    elseif offset + max_lines < #matches then
+        -- Subtract 1 line for "n hidden items".
+        max_lines = max_lines - 1
+    end
+
+    if selected_match ~= offset + clicked_line
+        and clicked_line > 0 and clicked_line <= max_lines then
+        selected_match = offset + clicked_line
+        update()
+    end
+end
+
+local function bind_mouse()
+    mp.add_forced_key_binding('MOUSE_MOVE', '_console_mouse_move', highlight_hovered_line)
+    mp.add_forced_key_binding('MBTN_LEFT', '_console_mbtn_left', function()
+        highlight_hovered_line()
+        handle_enter()
+    end)
 end
 
 -- Go to the specified position in the command history
@@ -931,6 +978,7 @@ local function search_history()
     end
 
     update()
+    bind_mouse()
 end
 
 local function page_up_or_prev_char()
@@ -1081,7 +1129,12 @@ end
 
 -- Paste text from the window-system's clipboard. 'clip' determines whether the
 -- clipboard or the primary selection buffer is used (on X11 and Wayland only.)
-local function paste(clip)
+local function paste(clip, is_wheel)
+    if is_wheel and selectable_items then
+        handle_enter()
+        return
+    end
+
     local text = get_clipboard(clip)
     local before_cur = line:sub(1, cursor - 1)
     local after_cur = line:sub(cursor)
@@ -1566,7 +1619,7 @@ local function get_bindings()
         { 'shift+del',   handle_del                             },
         { 'ins',         handle_ins                             },
         { 'shift+ins',   function() paste(false) end            },
-        { 'mbtn_mid',    function() paste(false) end            },
+        { 'mbtn_mid',    function() paste(false, true) end            },
         { 'left',        function() prev_char() end             },
         { 'ctrl+b',      function() page_up_or_prev_char() end  },
         { 'right',       function() next_char() end             },
@@ -1624,10 +1677,12 @@ local function define_key_bindings()
         return
     end
     for _, bind in ipairs(get_bindings()) do
-        -- Generate arbitrary name for removing the bindings later.
-        local name = "_console_" .. (#key_bindings + 1)
-        key_bindings[#key_bindings + 1] = name
-        mp.add_forced_key_binding(bind[1], name, bind[2], {repeatable = true})
+        if not (dont_bind_up_down and (bind[1] == 'up' or bind[1] == 'down')) then
+            -- Generate arbitrary name for removing the bindings later.
+            local name = "_console_" .. (#key_bindings + 1)
+            key_bindings[#key_bindings + 1] = name
+            mp.add_forced_key_binding(bind[1], name, bind[2], {repeatable = true})
+        end
     end
     mp.add_forced_key_binding("any_unicode", "_console_text", text_input,
         {repeatable = true, complex = true})
@@ -1662,6 +1717,7 @@ set_active = function (active)
         cursor = 1
         selectable_items = nil
         log_buffers[id] = {}
+        unbind_mouse()
     else
         repl_active = false
         suggestion_buffer = {}
@@ -1675,6 +1731,8 @@ set_active = function (active)
             line = ''
             cursor = 1
             selectable_items = nil
+            dont_bind_up_down = false
+            unbind_mouse()
         end
         collectgarbage()
     end
@@ -1734,6 +1792,7 @@ mp.register_script_message('get-input', function (script_name, args)
     line = args.default_text or ''
     cursor = args.cursor_position or line:len() + 1
     id = args.id or script_name .. prompt
+    dont_bind_up_down = args.dont_bind_up_down
     if histories[id] == nil then
         histories[id] = {}
         log_buffers[id] = {}
@@ -1749,6 +1808,7 @@ mp.register_script_message('get-input', function (script_name, args)
         for i, item in ipairs(selectable_items) do
             matches[i] = { index = i, text = item }
         end
+        bind_mouse()
     end
 
     set_active(true)

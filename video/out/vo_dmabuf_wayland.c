@@ -198,7 +198,7 @@ static void vaapi_dmabuf_importer(struct buffer *buf, struct mp_image *src,
         goto done;
     }
     buf->drm_format = desc.layers[layer_no].drm_format;
-    if (!ra_compatible_format(p->ctx->ra, src->params.hw_subfmt, buf->drm_format, desc.objects[0].drm_format_modifier)) {
+    if (!ra_compatible_format(p->ctx->ra, buf->drm_format, desc.objects[0].drm_format_modifier)) {
         MP_VERBOSE(vo, "%s(%016" PRIx64 ") is not supported.\n",
                    mp_tag_str(buf->drm_format), desc.objects[0].drm_format_modifier);
         buf->drm_format = 0;
@@ -451,7 +451,7 @@ static void create_shm_pool(struct vo *vo)
     struct vo_wayland_state *wl = vo->wl;
     struct priv *p = vo->priv;
 
-    int stride = MP_ALIGN_UP(vo->dwidth * 4, 16);
+    int stride = MP_ALIGN_UP(vo->dwidth * 4, MP_IMAGE_BYTE_ALIGN);
     size_t size = vo->dheight * stride;
     int fd = vo_wayland_allocate_memfd(vo, size);
     if (fd < 0)
@@ -680,7 +680,7 @@ static int reconfig(struct vo *vo, struct mp_image *img)
         return VO_ERROR;
     }
 
-    if (!ra_compatible_format(p->ctx->ra, img->params.hw_subfmt, p->drm_format, p->drm_modifier)) {
+    if (!ra_compatible_format(p->ctx->ra, p->drm_format, p->drm_modifier)) {
         MP_ERR(vo, "Format '%s' with modifier '(%016" PRIx64 ")' is not supported by"
                " the compositor.\n", mp_tag_str(p->drm_format), p->drm_modifier);
         return VO_ERROR;
@@ -783,7 +783,7 @@ static int preinit(struct vo *vo)
     } else {
         int width = 1;
         int height = 1;
-        int stride = MP_ALIGN_UP(width * 4, 16);
+        int stride = MP_ALIGN_UP(width * 4, MP_IMAGE_BYTE_ALIGN);
         int fd = vo_wayland_allocate_memfd(vo, stride);
         if (fd < 0)
             goto err;
