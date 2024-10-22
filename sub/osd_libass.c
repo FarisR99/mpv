@@ -207,6 +207,10 @@ void osd_mangle_ass(bstr *dst, const char *in, bool replace_newlines)
             in += 1;
             continue;
         }
+        if (*in == TERM_MSG_0[0]) {
+            in += 1;
+            continue;
+        }
         if (escape_ass && *in == '{')
             bstr_xappend(NULL, dst, bstr0("\\"));
         // Replace newlines with \N for escape-ass. This is necessary to apply
@@ -252,7 +256,7 @@ static ASS_Style *prepare_osd_ass(struct osd_state *osd, struct osd_object *obj)
 
     double playresy = obj->ass.track->PlayResY;
     // Compensate for libass and mp_ass_set_style scaling the font etc.
-    if (!opts->osd_scale_by_window)
+    if (!opts->osd_scale_by_window && obj->vo_res.h)
         playresy *= 720.0 / obj->vo_res.h;
 
     ASS_Style *style = get_style(&obj->ass, "OSD");

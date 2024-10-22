@@ -320,13 +320,16 @@ static char *skip_n_lines(char *text, int lines)
 
 static int count_lines(char *text)
 {
+    if (!text[0])
+        return 0;
+
     int count = 0;
     while (text) {
+        count++;
         char *next = strchr(text, '\n');
         if (!next || (next[0] == '\n' && !next[1]))
             break;
         text = next + 1;
-        count++;
     }
     return count;
 }
@@ -337,50 +340,36 @@ static int count_lines(char *text)
 // "text" might be returned as is, or it can be freed and a new allocation is
 // returned.
 // This is only a heuristic - we can't deal with line breaking.
-static char *cut_osd_list(struct MPContext *mpctx, char *text, int pos)
+static char *cut_osd_list(struct MPContext *mpctx, char *header, char *text, int pos)
 {
-    int screen_h, font_h;
-    osd_get_text_size(mpctx->osd, &screen_h, &font_h);
-    int max_lines = screen_h / MPMAX(font_h, 1) - 1;
-
-    if (!text || max_lines < 5)
-        return text;
-
     int count = count_lines(text);
-    if (count <= max_lines)
+    if (!count)
         return text;
 
-    char *new = talloc_strdup(NULL, "");
-
-    int start = MPMAX(pos - max_lines / 2, 0);
-    if (start == 1)
-        start = 0; // avoid weird transition when pad_h becomes visible
-    int pad_h = start > 0;
-
-    int space = max_lines - pad_h - 1;
-    int pad_t = count - start > space;
-    if (!pad_t)
-        start = count - space;
-
-    if (pad_h) {
-        new = talloc_asprintf_append_buffer(new, "\342\206\221 (%d hidden items)\n",
-                                            start);
+    int max_lines;
+    if (mpctx->video_out && mpctx->opts->video_osd) {
+        int screen_h, font_h;
+        osd_get_text_size(mpctx->osd, &screen_h, &font_h);
+        max_lines = screen_h / MPMAX(font_h, 1);
+    } else {
+        int w = -1;
+        max_lines = 24;
+        terminal_get_size(&w, &max_lines);
+        char *msg = mp_property_expand_escaped_string(mpctx, mpctx->opts->status_msg);
+        max_lines -= msg[0] ? count_lines(msg) : 1;
+        talloc_free(msg);
     }
+    // Subtract 1 for the header.
+    max_lines--;
 
+    char *new = talloc_asprintf(NULL, "%s [%d/%d]:\n", header, pos + 1, count);
+    int start = MPMIN(MPMAX(pos - max_lines / 2, 0), count - max_lines);
     char *head = skip_n_lines(text, start);
-    if (!head) {
-        talloc_free(new);
-        return text;
-    }
-
-    int lines_shown = max_lines - pad_h - pad_t;
-    char *tail = skip_n_lines(head, lines_shown);
+    char *tail = skip_n_lines(head, max_lines);
     new = talloc_asprintf_append_buffer(new, "%.*s",
                             (int)(tail ? tail - head : strlen(head)), head);
-    if (pad_t) {
-        new = talloc_asprintf_append_buffer(new, "\342\206\223 (%d hidden items)\n",
-                                            count - start - lines_shown + 1);
-    }
+    // Strip the final newline to not print it in the terminal.
+    new[strlen(new) - 1] = '\0';
 
     talloc_free(text);
     return new;
@@ -1068,17 +1057,16 @@ static int mp_property_list_chapters(void *ctx, struct m_property *prop,
         }
 
         for (n = 0; n < count; n++) {
-            char *name = chapter_display_name(mpctx, n);
+            char *name = chapter_name(mpctx, n);
             double t = chapter_start_time(mpctx, n);
             char* time = mp_format_time(t, false);
             res = talloc_asprintf_append(res, "%s", time);
             talloc_free(time);
             const char *m = n == cur ? list_current : list_normal;
-            res = talloc_asprintf_append(res, "   %s%s\n", m, name);
-            talloc_free(name);
+            res = talloc_asprintf_append(res, "  %s%s\n", m, name);
         }
 
-        *(char **)arg = res;
+        *(char **)arg = count ? cut_osd_list(mpctx, "Chapters", res, cur) : res;
         return M_PROPERTY_OK;
     }
     case M_PROPERTY_SET: {
@@ -2116,45 +2104,98 @@ static const char *track_type_name(struct track *t)
     return NULL;
 }
 
+
+static char *append_track_info(char *res, struct track *track)
+{
+    res = talloc_strdup_append(res, track->selected ? list_current : list_normal);
+    res = talloc_asprintf_append(res, "(%d) ", track->user_tid);
+    if (track->title)
+        res = talloc_asprintf_append(res, "'%s' ", track->title);
+    if (track->lang)
+        res = talloc_asprintf_append(res, "(%s) ", track->lang);
+    if (track->is_external)
+        res = talloc_asprintf_append(res, "(external) ");
+
+    return res;
+}
+
 static int property_list_tracks(void *ctx, struct m_property *prop,
                                 int action, void *arg)
 {
     MPContext *mpctx = ctx;
     if (action == M_PROPERTY_PRINT) {
-        char *res = NULL;
+        char *res = talloc_strdup(NULL, "");
 
         for (int type = 0; type < STREAM_TYPE_COUNT; type++) {
+            bool found = false;
+
             for (int n = 0; n < mpctx->num_tracks; n++) {
                 struct track *track = mpctx->tracks[n];
-                if (track->type != type)
-                    continue;
-
-                res = talloc_asprintf_append(res, "%s: ",
-                                             track_type_name(track));
-                res = talloc_strdup_append(res,
-                                track->selected ? list_current : list_normal);
-                res = talloc_asprintf_append(res, "(%d) ", track->user_tid);
-                if (track->title)
-                    res = talloc_asprintf_append(res, "'%s' ", track->title);
-                if (track->lang)
-                    res = talloc_asprintf_append(res, "(%s) ", track->lang);
-                if (track->is_external)
-                    res = talloc_asprintf_append(res, "(external) ");
-                res = talloc_asprintf_append(res, "\n");
+                if (track->type == type) {
+                    res = talloc_asprintf_append(res, "%s: ", track_type_name(track));
+                    res = append_track_info(res, track);
+                    res = talloc_asprintf_append(res, "\n");
+                    found = true;
+                }
             }
 
-            res = talloc_asprintf_append(res, "\n");
+            if (found && type < STREAM_TYPE_COUNT - 1) {
+                res = talloc_asprintf_append(res, "\n");
+                found = false;
+            }
         }
 
         struct demuxer *demuxer = mpctx->demuxer;
-        if (demuxer && demuxer->num_editions > 1)
-            res = talloc_asprintf_append(res, "\nEdition: %d of %d\n",
-                                        demuxer->edition + 1,
-                                        demuxer->num_editions);
+        if (demuxer && demuxer->num_editions > 1) {
+            res = talloc_asprintf_append(res, "\nEdition: %d of %d",
+                                         demuxer->edition + 1,
+                                         demuxer->num_editions);
+        } else {
+            res[strlen(res) - 1] = '\0';
+        }
 
         *(char **)arg = res;
         return M_PROPERTY_OK;
     }
+
+    if (action == M_PROPERTY_KEY_ACTION) {
+        struct m_property_action_arg *ka = arg;
+
+        int type = -1;
+        if (!strcmp(ka->key, "video")) {
+            type = STREAM_VIDEO;
+        } else if (!strcmp(ka->key, "audio")) {
+            type = STREAM_AUDIO;
+        } else if (!strcmp(ka->key, "sub")) {
+            type = STREAM_SUB;
+        }
+
+        if (type != -1) {
+            char *res;
+
+            switch (ka->action) {
+                case M_PROPERTY_GET_TYPE:
+                    *(struct m_option *)ka->arg = (struct m_option){.type = CONF_TYPE_STRING};
+                    return M_PROPERTY_OK;
+                case M_PROPERTY_PRINT:
+                    res = talloc_asprintf(NULL, "Available %s tracks:",
+                              type == STREAM_SUB ? "subtitle" : stream_type_name(type));
+
+                    for (int n = 0; n < mpctx->num_tracks; n++) {
+                        if (mpctx->tracks[n]->type == type) {
+                            res = talloc_strdup_append(res, "\n");
+                            res = append_track_info(res, mpctx->tracks[n]);
+                        }
+                    }
+
+                    *(char **)ka->arg = res;
+                    return M_PROPERTY_OK;
+                default:
+                    return M_PROPERTY_NOT_IMPLEMENTED;
+            }
+        }
+    }
+
     return m_property_read_list(action, arg, mpctx->num_tracks,
                                 get_track_entry, mpctx);
 }
@@ -2541,14 +2582,19 @@ static int mp_property_video_frame_info(void *ctx, struct m_property *prop,
 
     char approx_smpte[AV_TIMECODE_STR_SIZE] = {0};
     if (s12m_tc[0] == '\0' && mpctx->vo_chain) {
-        const AVTimecode tcr = {
-            .start = 0,
-            .flags = AV_TIMECODE_FLAG_DROPFRAME,
-            .rate = av_d2q(mpctx->vo_chain->filter->container_fps, INT_MAX),
-            .fps = lrint(mpctx->vo_chain->filter->container_fps),
-        };
-        int frame = lrint(get_current_pos_ratio(mpctx, false) * get_frame_count(mpctx));
-        av_timecode_make_string(&tcr, approx_smpte, frame);
+        unsigned container_fps = lrint(mpctx->vo_chain->filter->container_fps);
+        // Avoid division-by-zero in av_timecode_make_string() if reported
+        // container_fps is or rounds to 0.
+        if (container_fps) {
+            const AVTimecode tcr = {
+                .start = 0,
+                .flags = AV_TIMECODE_FLAG_DROPFRAME,
+                .rate = av_d2q(mpctx->vo_chain->filter->container_fps, INT_MAX),
+                .fps = container_fps,
+            };
+            int frame = lrint(get_current_pos_ratio(mpctx, false) * get_frame_count(mpctx));
+            av_timecode_make_string(&tcr, approx_smpte, frame);
+        }
     }
 
     struct m_sub_property props[] = {
@@ -2919,6 +2965,12 @@ static int mp_property_osd_ass(void *ctx, struct m_property *prop,
         {0}
     };
     return m_property_read_sub(props, action, arg);
+}
+
+static int mp_property_term_clip(void *ctx, struct m_property *prop,
+                               int action, void *arg)
+{
+    return m_property_strdup_ro(action, arg, TERM_MSG_0);
 }
 
 static int mp_property_term_size(void *ctx, struct m_property *prop,
@@ -3326,8 +3378,8 @@ static int mp_property_playlist(void *ctx, struct m_property *prop,
             }
         }
 
-        *(char **)arg =
-            cut_osd_list(mpctx, res, playlist_entry_to_index(pl, pl->current));
+        *(char **)arg = cut_osd_list(mpctx, "Playlist", res,
+                                     playlist_entry_to_index(pl, pl->current));
         return M_PROPERTY_OK;
     }
 
@@ -4153,6 +4205,8 @@ static const struct m_property mp_properties_base[] = {
 
     {"osd-sym-cc", mp_property_osd_sym},
     {"osd-ass-cc", mp_property_osd_ass},
+
+    {"term-clip-cc", mp_property_term_clip},
 
     {"mouse-pos", mp_property_mouse_pos},
     {"touch-pos", mp_property_touch_pos},
@@ -6706,6 +6760,17 @@ static void cmd_context_menu(void *p)
         vo_control(vo, VOCTRL_SHOW_MENU, NULL);
 }
 
+static void cmd_flush_status_line(void *p)
+{
+    struct mp_cmd_ctx *cmd = p;
+    struct MPContext *mpctx = cmd->mpctx;
+
+    if (!mpctx->log)
+        return;
+
+    mp_msg_flush_status_line(mpctx->log, cmd->args[0].v.b);
+}
+
 /* This array defines all known commands.
  * The first field the command name used in libmpv and input.conf.
  * The second field is the handler function (see mp_cmd_def.handler and
@@ -7181,6 +7246,8 @@ const struct mp_cmd_def mp_cmds[] = {
 
     { "context-menu", cmd_context_menu },
 
+    { "flush-status-line", cmd_flush_status_line, { {"clear", OPT_BOOL(v.b)} } },
+
     {0}
 };
 
@@ -7413,11 +7480,14 @@ void mp_option_change_callback(void *ctx, struct m_config_option *co, int flags,
                                       (void *)(uintptr_t)flags);
                 if (ret == CONTROL_OK && flags & (UPDATE_SUB_FILT | UPDATE_SUB_HARD)) {
                     sub_redecode_cached_packets(sub);
+                    sub_reset(sub);
                     if (track->selected)
                         reselect_demux_stream(mpctx, track, true);
                 }
             }
         }
+        // For subs on a still image.
+        redraw_subs(mpctx);
         osd_changed(mpctx->osd);
     }
 

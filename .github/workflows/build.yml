@@ -147,13 +147,9 @@ jobs:
           key: x86_64-windows-msvc-${{ steps.get_time.outputs.timestamp }}
           restore-keys: x86_64-windows-msvc-
 
-      # https://github.com/mesonbuild/meson/pull/11715
       - name: Install dependencies
         run: |
-          git clone https://github.com/kasper93/meson --depth 1 -b 8981
-          python -m pip install build wheel
-          python -m build --wheel --no-isolation meson
-          python -m pip install (Get-Item ./meson/dist/meson-*-py3-none-any.whl).FullName
+          python -m pip install meson
           choco install ccache nasm
 
       - name: Update Meson WrapDB
@@ -304,11 +300,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          # workaround to avoid "fatal: unsafe repository" error
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
       - name: Build with meson
         id: build
         run: |
@@ -387,7 +378,7 @@ jobs:
       - name: Build with meson
         id: build
         run: |
-              ./ci/build-linux-old.sh
+          ./ci/build-linux-old.sh
 
       - name: Print meson log
         if: ${{ failure() && steps.build.outcome == 'failure' }}

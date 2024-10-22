@@ -14,6 +14,7 @@ already bound to them:
 ====   ==============================================
 i      Show stats for a fixed duration
 I      Toggle stats (shown until toggled again)
+?      Toggle displaying the key bindings
 ====   ==============================================
 
 While the stats are visible on screen the following key bindings are active,
@@ -29,15 +30,24 @@ stats:
 0      Internal stuff (scroll)
 ====   ==================
 
+If stats were displayed by toggling, these key bindings are also active:
+
+====   ==================
+ESC    Close the stats
+====   ==================
+
 On pages which support scroll, these key bindings are also active:
 
 ====   ==================
-UP      Scroll one line up
-DOWN    Scroll one line down
+UP     Scroll one line up
+DOWN   Scroll one line down
 ====   ==================
 
-Page 4 also binds ``/`` to search for input bindings by typing part of a binding
-or command.
+On page 4, these key bindings are also active:
+
+====   ==================
+/      Search key bindings
+====   ==================
 
 Configuration
 -------------
@@ -61,6 +71,8 @@ Configurable Options
     Default: 5
 ``key_page_0``
     Default: 0
+``key_exit``
+    Default: ESC
 
     Key bindings for page switching while stats are displayed.
 
@@ -103,17 +115,10 @@ Configurable Options
 
     Only show the first specified amount of file tags.
 
-``term_width_limit``
-    Default: -1
+``term_clip``
+    Default: yes
 
-    Sets the terminal width.
-    A value of 0 means the width is infinite, -1 means it's automatic.
-
-``term_height_limit``
-    Default: -1
-
-    Sets the terminal height.
-    A value of 0 means the height is infinite, -1 means it's automatic.
+    Whether to clip lines to the terminal width.
 
 ``plot_perfdata``
     Default: yes
@@ -246,11 +251,11 @@ The keys are grouped automatically using a simple analysis of the command
 string, and one should not expect documentation-level grouping accuracy,
 however, it should still be reasonably useful.
 
-Using ``--idle --script-opts=stats-bindlist=yes`` will print the list to the
-terminal and quit immediately. By default long lines are shortened to 79 chars,
-and terminal escape sequences are enabled. A different length limit can be
-set by changing ``yes`` to a number (at least 40), and escape sequences can be
-disabled by adding ``-`` before the value, e.g. ``...=-yes`` or ``...=-120``.
+Using ``--idle --script-opt=stats-bindlist=yes`` will print the list to
+the terminal and quit immediately. Long lines are clipped to the terminal width
+unless this is disabled with ``--script-opt=stats-term_clip=no``. Escape
+sequences can be disabled by adding ``-`` before ``yes``, i.e.
+``--script-opt=stats-bindlist=-yes``.
 
 Like with ``--input-test``, the list includes bindings from ``input.conf`` and
 from user scripts. Use ``--no-config`` to list only built-in bindings.

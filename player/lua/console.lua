@@ -64,6 +64,7 @@ local styles = {
     fatal = '{\\1c&H5791f9&}',
     suggestion = '{\\1c&Hcc99cc&}',
     selected_suggestion = '{\\1c&H2fbdfa&\\b1}',
+    default_item = '{\\1c&H2fbdfa&}',
     disabled = '{\\1c&Hcccccc&}',
 }
 
@@ -74,6 +75,7 @@ local terminal_styles = {
     error = '\027[31m',
     fatal = '\027[91m',
     selected_suggestion = '\027[7m',
+    default_item = '\027[1m',
     disabled = '\027[38;5;8m',
 }
 
@@ -109,6 +111,7 @@ local selectable_items
 local matches = {}
 local selected_match = 1
 local first_match_to_print = 1
+local default_item
 
 local set_active
 
@@ -140,27 +143,6 @@ local function len_utf8(str)
         len = len + 1
     end
     return len
-end
-
-local function truncate_utf8(str, max_length)
-    local len = 0
-    local pos = 1
-    while pos <= #str do
-        local last_pos = pos
-        pos = next_utf8(str, pos)
-        len = len + 1
-        if pos > last_pos + 1 then
-            if len == max_length - 1 then
-                pos = last_pos
-            else
-                len = len + 1
-            end
-        end
-        if len == max_length - 1 then
-            return str:sub(1, pos - 1) .. '⋯'
-        end
-    end
-    return str
 end
 
 
@@ -371,22 +353,7 @@ local function fuzzy_find(needle, haystacks)
     return result
 end
 
-local function calculate_max_terminal_width()
-    local max_width = mp.get_property_native('term-size/w', 80)
-
-    -- The longest module name is vo/gpu-next/libplacebo.
-    if mp.get_property_native('msg-module') then
-        max_width = max_width - 24
-    end
-
-    if mp.get_property_native('msg-time') then
-        max_width = max_width - 13
-    end
-
-    return max_width
-end
-
-local function populate_log_with_matches(max_width)
+local function populate_log_with_matches()
     if not selectable_items or selected_match == 0 then
         return
     end
@@ -395,77 +362,51 @@ local function populate_log_with_matches(max_width)
     local log = log_buffers[id]
 
     local max_log_lines = calculate_max_log_lines()
+    local print_counter = false
 
-    if selected_match < first_match_to_print then
-        first_match_to_print = selected_match
-    end
-
-    if first_match_to_print > 1 then
-        -- Reserve the first line for "n hidden items".
+    if #matches > max_log_lines then
+        print_counter = true
         max_log_lines = max_log_lines - 1
     end
 
-    if selected_match > first_match_to_print + max_log_lines - 1 then
-        -- Reserve the first line for "n hidden items" if it wasn't already.
-        if first_match_to_print == 1 then
-            max_log_lines = max_log_lines - 1
-        end
-
+    if selected_match < first_match_to_print then
+        first_match_to_print = selected_match
+    elseif selected_match > first_match_to_print + max_log_lines - 1 then
         first_match_to_print = selected_match - max_log_lines + 1
     end
 
     local last_match_to_print  = math.min(first_match_to_print + max_log_lines - 1,
                                           #matches)
 
-    if last_match_to_print < #matches then
-        -- Reserve the last line for "n hidden items".
-        last_match_to_print = last_match_to_print - 1
-
-        -- After decrementing the last match to print, we need to check if the
-        -- selected match is beyond the last match to print again, and shift
-        -- both the first and last match to print when it is.
-        if selected_match > last_match_to_print then
-            if first_match_to_print == 1 then
-                -- Reserve the first line for "2 hidden items".
-                first_match_to_print = first_match_to_print + 1
-            end
-
-            first_match_to_print = first_match_to_print + 1
-            last_match_to_print = last_match_to_print + 1
-        end
-    end
-
-    -- When there is only 1 hidden item, print it in the previously reserved
-    -- line instead of printing "1 hidden items".
-    if first_match_to_print == 2 then
-        first_match_to_print = 1
-    end
-    if last_match_to_print == #matches - 1 then
-        last_match_to_print = #matches
-    end
-
-    if first_match_to_print > 1 then
+    if print_counter then
         log[1] = {
-            text = '↑ (' .. (first_match_to_print - 1) .. ' hidden items)',
-            style = styles.disabled,
-            terminal_style = terminal_styles.disabled,
+            text = '',
+            style = styles.disabled .. selected_match .. '/' .. #matches ..
+                    ' {\\fs' .. opts.font_size * 0.75 .. '}[' ..
+                    first_match_to_print .. '-' .. last_match_to_print .. ']',
+            terminal_style = terminal_styles.disabled .. selected_match .. '/' ..
+                             #matches .. ' [' .. first_match_to_print .. '-' ..
+                             last_match_to_print .. ']',
         }
     end
 
     for i = first_match_to_print, last_match_to_print do
-        log[#log + 1] = {
-            text = (max_width and truncate_utf8(matches[i].text, max_width)
-                    or matches[i].text),
-            style = i == selected_match and styles.selected_suggestion or '',
-            terminal_style = i == selected_match and terminal_styles.selected_suggestion or '',
-        }
-    end
+        local style = ''
+        local terminal_style = ''
 
-    if last_match_to_print < #matches then
+        if i == selected_match then
+            style = styles.selected_suggestion
+            terminal_style = terminal_styles.selected_suggestion
+        end
+        if matches[i].index == default_item then
+            style = style .. styles.default_item
+            terminal_style = terminal_style .. terminal_styles.default_item
+        end
+
         log[#log + 1] = {
-            text = '↓ (' .. (#matches - last_match_to_print) .. ' hidden items)',
-            style = styles.disabled,
-            terminal_style = terminal_styles.disabled,
+            text = matches[i].text,
+            style = style,
+            terminal_style = terminal_style,
         }
     end
 end
@@ -473,16 +414,19 @@ end
 local function print_to_terminal()
     -- Clear the log after closing the console.
     if not repl_active then
-        mp.osd_message('')
+        if osd_msg_active then
+            mp.osd_message('')
+        end
         osd_msg_active = false
         return
     end
 
-    populate_log_with_matches(calculate_max_terminal_width())
+    populate_log_with_matches()
 
     local log = ''
+    local clip = selectable_items and mp.get_property('term-clip-cc') or ''
     for _, log_line in ipairs(log_buffers[id]) do
-        log = log .. log_line.terminal_style .. log_line.text .. '\027[0m\n'
+        log = log .. clip .. log_line.terminal_style .. log_line.text .. '\027[0m\n'
     end
 
     local suggestions = ''
@@ -839,7 +783,7 @@ local function handle_enter()
     clear()
 end
 
-local function highlight_hovered_line()
+local function determine_hovered_item()
     local height = mp.get_property_native('osd-height')
     if height == 0 then
         return
@@ -852,30 +796,43 @@ local function highlight_hovered_line()
     / opts.font_size
     local clicked_line = math.floor(y / height * max_lines + .5)
 
-    -- Subtract 1 line for "n hidden items" when necessary.
-    local offset = first_match_to_print == 1 and 0 or first_match_to_print - 2
+    local offset = first_match_to_print - 1
+    local min_line = 1
     max_lines = calculate_max_log_lines()
+
+    -- Subtract 1 line for the position counter.
+    if first_match_to_print > 1 or offset + max_lines < #matches then
+        min_line = 2
+        offset = offset - 1
+    end
 
     if #matches < max_lines then
         clicked_line = clicked_line - (max_lines - #matches)
         max_lines = #matches
-    elseif offset + max_lines < #matches then
-        -- Subtract 1 line for "n hidden items".
-        max_lines = max_lines - 1
     end
 
-    if selected_match ~= offset + clicked_line
-        and clicked_line > 0 and clicked_line <= max_lines then
-        selected_match = offset + clicked_line
-        update()
+    if clicked_line >= min_line and clicked_line <= max_lines then
+        return offset + clicked_line
     end
 end
 
 local function bind_mouse()
-    mp.add_forced_key_binding('MOUSE_MOVE', '_console_mouse_move', highlight_hovered_line)
+    mp.add_forced_key_binding('MOUSE_MOVE', '_console_mouse_move', function()
+        local item = determine_hovered_item()
+        if item and item ~= selected_match then
+            selected_match = item
+            update()
+        end
+    end)
+
     mp.add_forced_key_binding('MBTN_LEFT', '_console_mbtn_left', function()
-        highlight_hovered_line()
-        handle_enter()
+        local item = determine_hovered_item()
+        if item then
+            selected_match = item
+            handle_enter()
+        else
+            set_active(false)
+        end
     end)
 end
 
@@ -916,7 +873,31 @@ local function go_history(new_pos)
 end
 
 -- Go to the specified relative position in the command history (Up, Down)
-local function move_history(amount)
+local function move_history(amount, is_wheel)
+    if is_wheel and selectable_items then
+        local max_lines = calculate_max_log_lines()
+
+        -- Update selected_match only if it's the first or last printed item and
+        -- there are hidden items.
+        if (amount > 0 and selected_match == first_match_to_print
+            and first_match_to_print + max_lines - 2 < #matches)
+           or (amount < 0 and selected_match == first_match_to_print + max_lines - 2
+               and first_match_to_print > 1) then
+            selected_match = selected_match + amount
+        end
+
+        if amount > 0 and first_match_to_print < #matches - max_lines + 2
+           or amount < 0 and first_match_to_print > 1 then
+           -- math.min and math.max would only be needed with amounts other than
+           -- 1 and -1.
+            first_match_to_print = math.min(
+                math.max(first_match_to_print + amount, 1), #matches - max_lines + 2)
+        end
+
+        update()
+        return
+    end
+
     if selectable_items then
         selected_match = selected_match + amount
         if selected_match > #matches then
@@ -934,11 +915,6 @@ end
 -- Go to the first command in the command history (PgUp)
 local function handle_pgup()
     if selectable_items then
-        -- We don't know whether to count the "n hidden items" lines here; an
-        -- offset of 2 is better with 1 extra line because it scrolls from the
-        -- last to the first visible match, while with both extra lines that is
-        -- done with +3. When there are no "n hidden items" lines selected_match
-        -- becomes 1 with any offset >= 1.
         selected_match = math.max(selected_match - calculate_max_log_lines() + 2, 1)
         update()
         return
@@ -1129,12 +1105,7 @@ end
 
 -- Paste text from the window-system's clipboard. 'clip' determines whether the
 -- clipboard or the primary selection buffer is used (on X11 and Wayland only.)
-local function paste(clip, is_wheel)
-    if is_wheel and selectable_items then
-        handle_enter()
-        return
-    end
-
+local function paste(clip)
     local text = get_clipboard(clip)
     local before_cur = line:sub(1, cursor - 1)
     local after_cur = line:sub(cursor)
@@ -1474,7 +1445,8 @@ local function complete(backwards)
         ['osd-auto'] = true, ['no-osd'] = true, ['osd-bar'] = true,
         ['osd-msg'] = true, ['osd-msg-bar'] = true, ['raw'] = true,
         ['expand-properties'] = true, ['repeatable'] = true,
-        ['nonrepeatable'] = true, ['async'] = true, ['sync'] = true
+        ['nonrepeatable'] = true, ['nonscalable'] = true,
+        ['async'] = true, ['sync'] = true
     }
 
     while tokens[first_useful_token_index] and
@@ -1619,17 +1591,18 @@ local function get_bindings()
         { 'shift+del',   handle_del                             },
         { 'ins',         handle_ins                             },
         { 'shift+ins',   function() paste(false) end            },
-        { 'mbtn_mid',    function() paste(false, true) end            },
+        { 'mbtn_mid',    function() paste(false) end            },
+        { 'mbtn_right',  function() set_active(false) end       },
         { 'left',        function() prev_char() end             },
         { 'ctrl+b',      function() page_up_or_prev_char() end  },
         { 'right',       function() next_char() end             },
         { 'ctrl+f',      function() page_down_or_next_char() end},
         { 'up',          function() move_history(-1) end        },
         { 'ctrl+p',      function() move_history(-1) end        },
-        { 'wheel_up',    function() move_history(-1) end        },
+        { 'wheel_up',    function() move_history(-1, true) end  },
         { 'down',        function() move_history(1) end         },
         { 'ctrl+n',      function() move_history(1) end         },
-        { 'wheel_down',  function() move_history(1) end         },
+        { 'wheel_down',  function() move_history(1, true) end   },
         { 'wheel_left',  function() end                         },
         { 'wheel_right', function() end                         },
         { 'ctrl+left',   prev_word                              },
@@ -1731,6 +1704,7 @@ set_active = function (active)
             line = ''
             cursor = 1
             selectable_items = nil
+            default_item = nil
             dont_bind_up_down = false
             unbind_mouse()
         end
@@ -1804,7 +1778,14 @@ mp.register_script_message('get-input', function (script_name, args)
     if selectable_items then
         matches = {}
         selected_match = args.default_item or 1
-        first_match_to_print = 1
+        default_item = args.default_item
+
+        local max_lines = calculate_max_log_lines()
+        first_match_to_print = math.max(1, selected_match - math.floor(max_lines / 2) + 1)
+        if first_match_to_print > #selectable_items - max_lines + 2 then
+            first_match_to_print = math.max(1, #selectable_items - max_lines + 1)
+        end
+
         for i, item in ipairs(selectable_items) do
             matches[i] = { index = i, text = item }
         end

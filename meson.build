@@ -134,6 +134,7 @@ sources = files(
     ## Misc
     'misc/bstr.c',
     'misc/charset_conv.c',
+    'misc/codepoint_width.c',
     'misc/dispatch.c',
     'misc/io_utils.c',
     'misc/json.c',
@@ -250,7 +251,6 @@ sources = files(
 
     ## osdep
     'osdep/io.c',
-    'osdep/semaphore-mac.c',
     'osdep/subprocess.c',
     'osdep/timer.c',
 
@@ -297,6 +297,11 @@ flags_c += cc.get_supported_arguments(test_flags_c)
 
 if cc.has_multi_arguments('-Wformat', '-Werror=format-security')
     flags += '-Werror=format-security'
+endif
+
+if cc.get_id() == 'gcc'
+    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=66425
+    flags +='-Wno-unused-result'
 endif
 
 darwin = host_machine.system() == 'darwin'
@@ -1809,9 +1814,9 @@ if get_option('cplayer')
     install_data('etc/mpv-symbolic.svg', install_dir: join_paths(hicolor_dir, 'symbolic', 'apps'))
 
     mpv = executable('mpv', main_fn_source, objects: libmpv.extract_all_objects(recursive: true), dependencies: dependencies,
-                     win_subsystem: 'windows', install: true)
+                     win_subsystem: get_option('win32-subsystem'), install: true)
 
-    if win32
+    if win32 and get_option('win32-subsystem') != 'console'
         wrapper_sources= 'osdep/win32-console-wrapper.c'
         executable('mpv', wrapper_sources, c_args: '-municode', link_args: '-municode',
                    name_suffix: 'com', install: true)
@@ -1827,11 +1832,16 @@ if get_option('cplayer')
 
     if not win32 and not darwin
         if meson.can_run_host_binaries()
+            mpv_protocols = custom_target('mpv_protocols',
+                output: 'mpv_protocols',
+                command: [mpv, '--no-config','--list-protocols'],
+                capture: true,
+            )
             mpv_desktop_path = join_paths(source_root, 'etc', 'mpv.desktop')
             custom_target('mpv.desktop',
-                depends: mpv,
+                input: mpv_protocols,
                 output: 'mpv.desktop',
-                command: [mpv_desktop, mpv_desktop_path, mpv.full_path(), '@OUTPUT@'],
+                command: [mpv_desktop, mpv_desktop_path, '@INPUT@', '@OUTPUT@'],
                 install: true,
                 install_dir: join_paths(datadir, 'applications'),
             )

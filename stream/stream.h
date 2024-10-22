@@ -38,21 +38,26 @@
 // flags for stream_open_ext (this includes STREAM_READ and STREAM_WRITE)
 
 // stream->mode
-#define STREAM_READ             0
-#define STREAM_WRITE            (1 << 0)
+#define STREAM_READ               0
+#define STREAM_WRITE              (1 << 0)
 
-#define STREAM_SILENT           (1 << 1)
+#define STREAM_SILENT             (1 << 1)
 
 // Origin value for "security". This is an integer within the flags bit-field.
-#define STREAM_ORIGIN_DIRECT    (1 << 2) // passed from cmdline or loadfile
-#define STREAM_ORIGIN_FS        (2 << 2) // referenced from playlist on unix FS
-#define STREAM_ORIGIN_NET       (3 << 2) // referenced from playlist on network
-#define STREAM_ORIGIN_UNSAFE    (4 << 2) // from a grotesque source
+#define STREAM_ORIGIN_DIRECT      (1 << 2) // passed from cmdline or loadfile
+#define STREAM_ORIGIN_FS          (2 << 2) // referenced from playlist on unix FS
+#define STREAM_ORIGIN_NET         (3 << 2) // referenced from playlist on network
+#define STREAM_ORIGIN_UNSAFE      (4 << 2) // from a grotesque source
 
-#define STREAM_ORIGIN_MASK      (7 << 2) // for extracting origin value from flags
+#define STREAM_ORIGIN_MASK        (7 << 2) // for extracting origin value from flags
 
-#define STREAM_LOCAL_FS_ONLY    (1 << 5) // stream_file only, no URLs
-#define STREAM_LESS_NOISE       (1 << 6) // try to log errors only
+#define STREAM_LOCAL_FS_ONLY      (1 << 5) // stream_file only, no URLs
+#define STREAM_LESS_NOISE         (1 << 6) // try to log errors only
+#define STREAM_ALLOW_PARTIAL_READ (1 << 7) // allows partial read with stream_read_file()
+
+// Default flags used by stream_read_file().
+#define STREAM_READ_FILE_FLAGS_DEFAULT \
+    (STREAM_ORIGIN_DIRECT | STREAM_READ | STREAM_LOCAL_FS_ONLY | STREAM_LESS_NOISE)
 
 // end flags for stream_open_ext (the naming convention sucks)
 
@@ -155,6 +160,7 @@ typedef struct stream {
     bool is_local_fs : 1; // from the filesystem
     bool is_directory : 1; // directory on the filesystem
     bool access_references : 1; // open other streams
+    bool allow_partial_read : 1; // allows partial read with stream_read_file()
     struct mp_log *log;
     struct mpv_global *global;
 
@@ -228,6 +234,9 @@ struct bstr stream_read_complete(struct stream *s, void *talloc_ctx,
                                  int max_size);
 struct bstr stream_read_file(const char *filename, void *talloc_ctx,
                              struct mpv_global *global, int max_size);
+// Like stream_read_file(), but allows specifying flags like with stream_create().
+struct bstr stream_read_file2(const char *filename, void *talloc_ctx,
+                              int flags, struct mpv_global *global, int max_size);
 
 int stream_control(stream_t *s, int cmd, void *arg);
 void free_stream(stream_t *s);

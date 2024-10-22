@@ -1117,7 +1117,10 @@ static void update_maximized_state(struct vo_w32_state *w32, bool leaving_fullsc
     if (w32->current_fs && !leaving_fullscreen)
         return;
 
-    bool toggle = !w32->opts->window_maximized && IsMaximized(w32->window);
+    bool toggle = w32->opts->window_maximized ^ IsMaximized(w32->window);
+
+    if (toggle && !w32->current_fs && w32->opts->window_maximized)
+        w32->prev_windowrc = w32->windowrc;
 
     WINDOWPLACEMENT wp = { .length = sizeof wp };
     GetWindowPlacement(w32->window, &wp);
@@ -1139,7 +1142,7 @@ static void update_maximized_state(struct vo_w32_state *w32, bool leaving_fullsc
         }
     }
 
-    if (toggle && !w32->current_fs) {
+    if (toggle && !w32->current_fs && !w32->opts->window_maximized) {
         w32->windowrc = w32->prev_windowrc;
         update_window_state(w32);
     }
@@ -1171,7 +1174,8 @@ static void update_window_state(struct vo_w32_state *w32)
 
     SetWindowPos(w32->window, w32->opts->ontop ? HWND_TOPMOST : HWND_NOTOPMOST,
                  wr.left, wr.top, rect_w(wr), rect_h(wr),
-                 SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+                 SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOOWNERZORDER |
+                 (!w32->win_force_pos ? SWP_NOMOVE : 0));
 
     // Unmaximize the window if a size change is requested because SetWindowPos
     // doesn't change the window maximized state.
@@ -1929,7 +1933,8 @@ static void window_reconfig(struct vo_w32_state *w32, bool force)
     if (w32->dpi_scale == 0)
         force_update_display_info(w32);
 
-    vo_calc_window_geometry(vo, &screen, &mon, w32->dpi_scale, false, &geo);
+    vo_calc_window_geometry(vo, &screen, &mon, w32->dpi_scale,
+                            !w32->window_bounds_initialized, &geo);
     vo_apply_window_geometry(vo, &geo);
 
     bool reset_size = ((w32->o_dwidth != vo->dwidth ||
@@ -1945,7 +1950,7 @@ static void window_reconfig(struct vo_w32_state *w32, bool force)
         w32->prev_windowrc = w32->windowrc;
         w32->window_bounds_initialized = true;
         w32->win_force_pos = geo.flags & VO_WIN_FORCE_POS;
-        w32->fit_on_screen = !w32->win_force_pos;
+        w32->fit_on_screen = true;
         goto finish;
     }
 

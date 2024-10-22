@@ -1832,6 +1832,13 @@ prefixes can be specified. They are separated by whitespace.
 ``nonrepeatable``
     For some commands, keeping a key pressed runs the command repeatedly.
     This prefix forces disabling key repeat in any case.
+``nonscalable``
+    When some commands (e.g. ``add``) are bound to scalable keys associated to a
+    high-precision input device like a touchpad (e.g. ``WHEEL_UP``), the value
+    specified in the command is scaled to smaller steps based on the high
+    resolution input data if available.
+    This prefix forces disabling this behavior, so the value is always changed
+    in the discrete unit specified in the key binding.
 ``async``
     Allow asynchronous execution (if possible). Note that only a few commands
     will support this (usually this is explicitly documented). Some commands
@@ -2180,8 +2187,7 @@ Property list
     Number of MKV editions.
 
 ``edition-list``
-    List of editions, current entry marked. Currently, the raw property value
-    is useless.
+    List of editions, current entry marked.
 
     This has a number of sub-properties. Replace ``N`` with the 0-based edition
     index.
@@ -3082,14 +3088,25 @@ Property list
                 "id"        MPV_FORMAT_INT64
 
 ``track-list``
-    List of audio/video/sub tracks, current entry marked. Currently, the raw
-    property value is useless.
+    List of audio/video/sub tracks, current entry marked.
 
     This has a number of sub-properties. Replace ``N`` with the 0-based track
     index.
 
     ``track-list/count``
         Total number of tracks.
+
+    ``track-list/video``
+        The list of video tracks. This is only usable for printing and its value
+        can't be retrieved.
+
+    ``track-list/audio``
+        The list of audio tracks. This is only usable for printing and its value
+        can't be retrieved.
+
+    ``track-list/sub``
+        The list of sub tracks. This is only usable for printing and its value
+        can't be retrieved.
 
     ``track-list/N/id``
         The ID as it's used for ``--sid``/``--aid``/``--vid``. This is unique
@@ -3311,8 +3328,7 @@ Property list
     first one is returned.
 
 ``chapter-list`` (RW)
-    List of chapters, current entry marked. Currently, the raw property value
-    is useless.
+    List of chapters, current entry marked.
 
     This has a number of sub-properties. Replace ``N`` with the 0-based chapter
     index.
@@ -3376,6 +3392,11 @@ Property list
 ``cursor-autohide`` (RW)
     See ``--cursor-autohide``. Setting this to a new value will always update
     the cursor, and reset the internal timer.
+
+``term-clip-cc``
+    Inserts the symbol to force line truncation to the current terminal width.
+    This can be used for ``show-text`` and other OSD messages. It must be the
+    first character in the line. It takes effect until the end of the line.
 
 ``osd-sym-cc``
     Inserts the current OSD symbol as opaque OSD control code (cc). This makes
@@ -3838,8 +3859,6 @@ Property list
         result in an entry with ``comment = "toggle bla", cmd = "cycle bla"``.)
 
     This property is read-only, and change notification is not supported.
-    Currently, there is no mechanism to change key bindings at runtime, other
-    than scripts adding or removing their own bindings.
 
 Inconsistencies between options and properties
 ----------------------------------------------

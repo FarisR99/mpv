@@ -31,24 +31,27 @@ The Interface
 pl prev
     =============   ================================================
     left-click      play previous file in playlist
-    right-click     show playlist
-    shift+L-click   show playlist
+    right-click     open the playlist selector
+    shift+L-click   show the playlist
+    middle-click    show the playlist
     =============   ================================================
 
 pl next
     =============   ================================================
     left-click      play next file in playlist
-    right-click     show playlist
-    shift+L-click   show playlist
+    right-click     open the playlist selector
+    shift+L-click   show the playlist
+    middle-click    show the playlist
     =============   ================================================
 
 title
-    | Displays current media-title, filename, custom title, or target chapter
-      name while hovering the seekbar.
+    | Displays the current playlist position and media-title, filename or custom
+      title, or the target chapter name while hovering the seekbar.
 
     =============   ================================================
-    left-click      show playlist position and length and full title
-    right-click     show filename
+    left-click      open the playlist selector
+    middle-click    show the filename
+    right-click     show file and track info
     =============   ================================================
 
 cache
@@ -57,6 +60,7 @@ cache
 play
     =============   ================================================
     left-click      toggle play/pause
+    right-click     toggle infinite looping
     =============   ================================================
 
 skip back
@@ -85,6 +89,7 @@ seekbar
 
     =============   ================================================
     left-click      seek to position
+    right-click     seek to the nearest chapter
     mouse wheel     seek forward/backward
     =============   ================================================
 
@@ -99,15 +104,17 @@ audio and sub
     | Displays selected track and amount of available tracks
 
     =============   ================================================
-    left-click      cycle audio/sub tracks forward
-    right-click     cycle audio/sub tracks backwards
+    left-click      open the audio/sub track selector
     shift+L-click   show available audio/sub tracks
+    middle-click    show available audio/sub tracks
+    right-click     show available audio/sub tracks
     mouse wheel     cycle audio/sub tracks forward/backwards
     =============   ================================================
 
 vol
     =============   ================================================
     left-click      toggle mute
+    right-click     open the audio device selector
     mouse wheel     volume up/down
     =============   ================================================
 
@@ -287,7 +294,7 @@ Configurable Options
     Duration of fade out in ms, 0 = no fade
 
 ``title``
-    Default: ${media-title}
+    Default: ${!playlist-count==1:[${playlist-pos-1}/${playlist-count}] }${media-title}
 
     String that supports property expansion that will be displayed as
     OSC title.
@@ -486,6 +493,74 @@ Configurable Options
 
     Use display fps to calculate the interval between OSC redraws.
 
+The following options configure what commands are run when the buttons are
+clicked. ``mbtn_mid`` commands are also triggered with ``shift+mbtn_left``.
+
+``title_mbtn_left_command=script-binding select/select-playlist; script-message-to osc osc-hide``
+
+``title_mbtn_mid_command=show-text ${filename}``
+
+``title_mbtn_right_command=script-binding stats/display-page-5``
+
+``playlist_prev_mbtn_left_command=playlist-prev; show-text ${playlist} 3000``
+
+``playlist_prev_mbtn_mid_command=show-text ${playlist} 3000``
+
+``playlist_prev_mbtn_right_command=script-binding select/select-playlist; script-message-to osc osc-hide``
+
+``playlist_next_mbtn_left_command=playlist-next; show-text ${playlist} 3000``
+
+``playlist_next_mbtn_mid_command=show-text ${playlist} 3000``
+
+``playlist_next_mbtn_right_command=script-binding select/select-playlist; script-message-to osc osc-hide``
+
+``play_pause_mbtn_left_command=cycle pause``
+
+``play_pause_mbtn_mid_command=``
+
+``play_pause_mbtn_right_command=cycle-values loop-file inf no``
+
+``chapter_prev_mbtn_left_command=no-osd add chapter -1; show-text ${chapter-list} 3000``
+
+``chapter_prev_mbtn_mid_command=show-text ${chapter-list} 3000``
+
+``chapter_prev_mbtn_right_command=script-binding select/select-chapter; script-message-to osc osc-hide``
+
+``chapter_next_mbtn_left_command=no-osd add chapter 1; show-text ${chapter-list} 3000``
+
+``chapter_next_mbtn_mid_command=show-text ${chapter-list} 3000``
+
+``chapter_next_mbtn_right_command=script-binding select/select-chapter; script-message-to osc osc-hide``
+
+``audio_track_mbtn_left_command=script-binding select/select-aid; script-message-to osc osc-hide``
+
+``audio_track_mbtn_mid_command=show-text ${track-list/audio} 2000``
+
+``audio_track_mbtn_right_command=show-text ${track-list/audio} 2000``
+
+``audio_track_wheel_down_command=cycle audio``
+
+``audio_track_wheel_up_command=cycle audio down``
+
+``sub_track_mbtn_left_command=script-binding select/select-sid; script-message-to osc osc-hide``
+
+``sub_track_mbtn_mid_command=show-text ${track-list/sub} 2000``
+
+``sub_track_mbtn_right_command=show-text ${track-list/sub} 2000``
+
+``sub_track_wheel_down_command=cycle sub``
+
+``sub_track_wheel_up_command=cycle sub down``
+
+``volume_mbtn_left_command=no-osd cycle mute``
+
+``volume_mbtn_mid_command=``
+
+``volume_mbtn_right_command=script-binding select/select-audio-device; script-message-to osc osc-hide``
+
+``volume_wheel_down_command=add volume -5``
+
+``volume_wheel_up_command=add volume 5``
 
 Script Commands
 ~~~~~~~~~~~~~~~
@@ -493,16 +568,15 @@ Script Commands
 The OSC script listens to certain script commands. These commands can bound
 in ``input.conf``, or sent by other scripts.
 
-``osc-message``
-    Show a message on screen using the OSC. First argument is the message,
-    second the duration in seconds.
-
 ``osc-visibility``
     Controls visibility mode ``never`` / ``auto`` (on mouse move) / ``always``
     and also ``cycle`` to cycle between the modes.
 
 ``osc-show``
     Triggers the OSC to show up, just as if user moved mouse.
+
+``osc-hide``
+    Hide the OSC when ``visibility`` is ``auto``.
 
 Example
 
@@ -515,8 +589,3 @@ to set auto mode (the default) with ``b``::
 ``osc-idlescreen``
     Controls the visibility of the mpv logo on idle. Valid arguments are ``yes``,
     ``no``, and ``cycle`` to toggle between yes and no.
-
-``osc-playlist``, ``osc-chapterlist``, ``osc-tracklist``
-    Shows a limited view of the respective type of list using the OSC. First
-    argument is duration in seconds.
-

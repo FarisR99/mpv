@@ -345,7 +345,7 @@ const struct m_sub_options mp_subtitle_sub_opts = {
         {"teletext-page", OPT_INT(teletext_page), M_RANGE(-1, 999), .flags = UPDATE_SUB_FILT},
         {"sub-past-video-end", OPT_BOOL(sub_past_video_end)},
         {"sub-ass-force-style", OPT_REPLACED("sub-ass-style-overrides")},
-        {"sub-lavc-o", OPT_KEYVALUELIST(sub_avopts)},
+        {"sub-lavc-o", OPT_KEYVALUELIST(sub_avopts), .flags = UPDATE_SUB_HARD},
         {0}
     },
     .size = sizeof(OPT_BASE_STRUCT),
@@ -557,6 +557,7 @@ static const m_option_t mp_opts[] = {
     {"scripts", OPT_PATHLIST(script_files), .flags = M_OPT_FILE},
     {"script", OPT_CLI_ALIAS("scripts-append")},
     {"script-opts", OPT_KEYVALUELIST(script_opts)},
+    {"script-opt", OPT_CLI_ALIAS("script-opts-append")},
     {"load-scripts", OPT_BOOL(auto_load_scripts)},
 #endif
 #if HAVE_JAVASCRIPT
@@ -569,8 +570,9 @@ static const m_option_t mp_opts[] = {
     {"ytdl-raw-options", OPT_KEYVALUELIST(lua_ytdl_raw_options)},
     {"load-stats-overlay", OPT_BOOL(lua_load_stats),
         .flags = UPDATE_BUILTIN_SCRIPTS},
-    {"load-osd-console", OPT_BOOL(lua_load_console),
+    {"load-console", OPT_BOOL(lua_load_console),
         .flags = UPDATE_BUILTIN_SCRIPTS},
+    {"load-osd-console", OPT_REPLACED("load-console")},
     {"load-auto-profiles",
         OPT_CHOICE(lua_load_auto_profiles, {"no", 0}, {"yes", 1}, {"auto", -1}),
         .flags = UPDATE_BUILTIN_SCRIPTS},

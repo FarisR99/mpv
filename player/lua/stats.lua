@@ -24,6 +24,7 @@ local o = {
     key_scroll_up = "UP",
     key_scroll_down = "DOWN",
     key_search = "/",
+    key_exit = "ESC",
     scroll_lines = 1,
 
     duration = 4,
@@ -34,8 +35,7 @@ local o = {
     file_tag_max_length = 128,       -- only show file tags shorter than this length in bytes
     file_tag_max_count = 16,         -- only show the first x file tags
     show_frame_info = false,         -- whether to show the current frame info
-    term_width_limit = -1,           -- overwrites the terminal width
-    term_height_limit = -1,          -- overwrites the terminal height
+    term_clip = true,
     debug = false,
 
     -- Graph options and style
@@ -80,7 +80,7 @@ local o = {
     ass_it0 = "{\\i0}",
     -- Without ASS
     no_ass_nl = "\n",
-    no_ass_indent = "\t",
+    no_ass_indent = "    ",
     no_ass_prefix_sep = " ",
     no_ass_b1 = "\027[1m",
     no_ass_b0 = "\027[0m",
@@ -90,15 +90,6 @@ local o = {
     bindlist = "no",  -- print page 4 to the terminal on startup and quit mpv
 }
 options.read_options(o)
-
-o.term_width_limit = tonumber(o.term_width_limit) or -1
-o.term_height_limit = tonumber(o.term_height_limit) or -1
-if o.term_width_limit < 0 then
-    o.term_width_limit = nil
-end
-if o.term_height_limit < 0 then
-    o.term_height_limit = nil
-end
 
 local format = string.format
 local max = math.max
@@ -135,6 +126,7 @@ local function init_buffers()
 end
 local cache_ahead_buf, cache_speed_buf
 local perf_buffers = {}
+local process_key_binding
 
 local function graph_add_value(graph, value)
     graph.pos = (graph.pos % graph.len) + 1
@@ -412,8 +404,9 @@ end
 -- command prefix tokens to strip - includes generic property commands
 local cmd_prefixes = {
     osd_auto=1, no_osd=1, osd_bar=1, osd_msg=1, osd_msg_bar=1, raw=1, sync=1,
-    async=1, expand_properties=1, repeatable=1, nonrepeatable=1, set=1, add=1,
-    multiply=1, toggle=1, cycle=1, cycle_values=1, ["!reverse"]=1, change_list=1,
+    async=1, expand_properties=1, repeatable=1, nonrepeatable=1, nonscalable=1,
+    set=1, add=1, multiply=1, toggle=1, cycle=1, cycle_values=1, ["!reverse"]=1,
+    change_list=1,
 }
 -- commands/writable-properties prefix sub-words (followed by -) to strip
 local name_prefixes = {
@@ -1090,47 +1083,6 @@ local function eval_ass_formatting()
     end
 end
 
--- assumptions:
---   s is composed of SGR escape sequences and/or printable UTF8 sequences
---   printable codepoints occupy one terminal cell (we don't have wcwidth)
---   tabstops are 8, 16, 24..., and the output starts at 0 or a tabstop
--- note: if maxwidth <= 2 and s doesn't fit: the result is "..." (more than 2)
-local function term_ellipsis(s, maxwidth)
-    local TAB, ESC, SGR_END = 9, 27, ("m"):byte()
-    local width, ellipsis = 0, "..."
-    local fit_len, in_sgr
-
-    for i = 1, #s do
-        local x = s:byte(i)
-
-        if in_sgr then
-            in_sgr = x ~= SGR_END
-        elseif x == ESC then
-            in_sgr = true
-            ellipsis = "\27[0m..."  -- ensure SGR reset
-        elseif x < 128 or x >= 192 then  -- non UTF8-continuation
-            -- tab adds till the next stop, else add 1
-            width = width + (x == TAB and 8 - width % 8 or 1)
-
-            if fit_len == nil and width > maxwidth - 3 then
-                fit_len = i - 1  -- adding "..." still fits maxwidth
-            end
-            if width > maxwidth then
-                return s:sub(1, fit_len) .. ellipsis
-            end
-        end
-    end
-
-    return s
-end
-
-local function term_ellipsis_array(arr, from, to, max_width)
-    for i = from, to do
-        arr[i] = term_ellipsis(arr[i], max_width)
-    end
-    return arr
-end
-
 -- split str into a table
 -- example: local t = split(s, "\n")
 -- plain: whether pat is a plain string (default false - pat is a pattern)
@@ -1152,11 +1104,9 @@ end
 -- content     : table of the content where each entry is one line
 -- apply_scroll: scroll the content
 local function finalize_page(header, content, apply_scroll)
-    local term_size = mp.get_property_native("term-size", {})
-    local term_width = o.term_width_limit or term_size.w or 80
-    local term_height = o.term_height_limit or term_size.h or 24
+    local term_height = mp.get_property_native("term-size/h", 24)
     local from, to = 1, #content
-    if apply_scroll and term_height > 0 then
+    if apply_scroll then
         -- Up to 40 lines for libass because it can put a big performance toll on
         -- libass to process many lines which end up outside (below) the screen.
         -- In the terminal reduce height by 2 for the status line (can be more then one line)
@@ -1168,10 +1118,10 @@ local function finalize_page(header, content, apply_scroll)
         pages[curr_page].offset = from
     end
     local output = table.concat(header) .. table.concat(content, "", from, to)
-    if not o.use_ass and term_width > 0 then
+    if not o.use_ass and o.term_clip then
+        local clip = mp.get_property("term-clip-cc")
         local t = split(output, "\n", true)
-        -- limit width for the terminal
-        output = table.concat(term_ellipsis_array(t, 1, #t, term_width), "\n")
+        output = clip .. table.concat(t, "\n" .. clip)
     end
     return output, from
 end
@@ -1204,11 +1154,12 @@ local function keybinding_info(after_scroll, bindlist)
     local page = pages[o.key_page_4]
     eval_ass_formatting()
     add_header(header)
-    append(header, "", {prefix=format("%s:%s", page.desc, scroll_hint(true)), nl="", indent=""})
+    local prefix = bindlist and page.desc or page.desc .. ":" .. scroll_hint(true)
+    append(header, "", {prefix=prefix, nl="", indent=""})
     header = {table.concat(header)}
 
     if not kbinfo_lines or not after_scroll then
-        kbinfo_lines = get_kbinfo_lines(o.term_width_limit)
+        kbinfo_lines = get_kbinfo_lines()
     end
 
     return finalize_page(header, kbinfo_lines, not bindlist)
@@ -1525,7 +1476,7 @@ local function print_page(page, after_scroll)
     end
 end
 
-local function update_scale(value)
+local function update_scale(osd_height)
     local scale_with_video
     if o.vidscale == "auto" then
         scale_with_video = mp.get_property_native("osd-scale-by-window")
@@ -1535,8 +1486,8 @@ local function update_scale(value)
 
     -- Calculate scaled metrics.
     local scale = 1
-    if not scale_with_video and value > 0 then
-        scale = 720 / value
+    if not scale_with_video and osd_height > 0 then
+        scale = 720 / osd_height
     end
     font_size = o.font_size * scale
     border_size = o.border_size * scale
@@ -1548,13 +1499,12 @@ local function update_scale(value)
     end
 end
 
-local function handle_osd_height_update(_, value)
-    update_scale(value)
+local function handle_osd_height_update(_, osd_height)
+    update_scale(osd_height)
 end
 
 local function handle_osd_scale_by_window_update()
-    local value = mp.get_property_native("osd-height")
-    update_scale(value)
+    update_scale(mp.get_property_native("osd-height"))
 end
 
 local function clear_screen()
@@ -1631,6 +1581,21 @@ local function unbind_search()
     mp.remove_key_binding("__forced_"..o.key_search)
 end
 
+local function bind_exit()
+    -- Don't bind in oneshot mode because if ESC is pressed right when the stats
+    -- stop being displayed, it would unintentionally trigger any user-defined
+    -- ESC binding.
+    if not display_timer.oneshot then
+        mp.add_forced_key_binding(o.key_exit, "__forced_" .. o.key_exit, function ()
+            process_key_binding(false)
+        end)
+    end
+end
+
+local function unbind_exit()
+    mp.remove_key_binding("__forced_" .. o.key_exit)
+end
+
 local function update_scroll_bindings(k)
     if pages[k].scroll then
         bind_scroll()
@@ -1660,6 +1625,7 @@ local function add_page_bindings()
         mp.add_forced_key_binding(k, "__forced_"..k, a(k), {repeatable=true})
     end
     update_scroll_bindings(curr_page)
+    bind_exit()
 end
 
 
@@ -1670,10 +1636,11 @@ local function remove_page_bindings()
     end
     unbind_scroll()
     unbind_search()
+    unbind_exit()
 end
 
 
-local function process_key_binding(oneshot)
+process_key_binding = function(oneshot)
     reset_scroll_offsets()
     -- Stats are already being displayed
     if display_timer:is_enabled() then
@@ -1774,21 +1741,27 @@ mp.register_event("video-reconfig",
         end
     end)
 
---  --script-opts=stats-bindlist=[-]{yes|<TERM-WIDTH>}
 if o.bindlist ~= "no" then
-    mp.command("no-osd set really-quiet yes")
-    if o.bindlist:sub(1, 1) == "-" then
-        o.bindlist = o.bindlist:sub(2)
-        o.no_ass_b0 = ""
-        o.no_ass_b1 = ""
-    end
-    local width = max(40, math.floor(tonumber(o.bindlist) or 79))
-    mp.add_timeout(0, function()  -- wait for all other scripts to finish init
+    -- This is a special mode to print key bindings to the terminal,
+    -- Adjust the print format and level to make it print only the key bindings.
+    mp.set_property("msg-level", "all=no,statusline=status")
+    mp.set_property("term-osd", "force")
+    mp.set_property_bool("msg-module", false)
+    mp.set_property_bool("msg-time", false)
+    -- wait for all other scripts to finish init
+    mp.add_timeout(0, function()
+        if o.bindlist:sub(1, 1) == "-" then
+            o.no_ass_b0 = ""
+            o.no_ass_b1 = ""
+        end
         o.ass_formatting = false
         o.no_ass_indent = " "
-        o.term_size = { w = width , h = 0}
-        io.write(keybinding_info(false, true) .. "\n")
-        mp.command("quit")
+        mp.osd_message(keybinding_info(false, true))
+        -- wait for next tick to print status line and flush it without clearing
+        mp.add_timeout(0, function()
+            mp.command("flush-status-line no")
+            mp.command("quit")
+        end)
     end)
 end
 

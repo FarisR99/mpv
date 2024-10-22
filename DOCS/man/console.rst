@@ -3,7 +3,7 @@ CONSOLE
 
 The console is a REPL for mpv input commands. It is displayed on the video
 window. It also shows log messages. It can be disabled entirely using the
-``--load-osd-console=no`` option.
+``--load-console=no`` option.
 
 Keybindings
 -----------
@@ -97,6 +97,18 @@ Shift+TAB
 
 Ctrl+l
     Clear all log messages from the console.
+
+MBTN_RIGHT
+    Hide the console.
+
+MBTN_MID
+    Paste text (uses the primary selection on X11 and Wayland).
+
+WHEEL_UP
+    Move back in the command history.
+
+WHEEL_DOWN
+    Move forward in the command history.
 
 Commands
 --------
