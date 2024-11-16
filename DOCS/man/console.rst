@@ -147,22 +147,32 @@ Configurable Options
 ~~~~~~~~~~~~~~~~~~~~
 
 ``font``
-    Default: unset (picks a hardcoded font depending on detected platform)
+    Default: a monospace font depending on the platform
 
-    Set the font used for the REPL and the console.
-    This has to be a monospaced font for the completion suggestions to be
-    aligned correctly.
+    Set the font used for the console.
+    A monospaced font is necessary to align completion suggestions correctly in
+    a grid.
+    If the console was opened by calling ``mp.input.select`` and no font was
+    configured, ``--osd-font`` is used, as alignment is not necessary in that
+    case.
 
 ``font_size``
-    Default: 16
+    Default: 24
 
     Set the font size used for the REPL and the console. This will be
-    multiplied by ``display-hidpi-scale``.
+    multiplied by ``display-hidpi-scale`` when the console is not scaled with
+    the window.
 
 ``border_size``
-    Default: 1
+    Default: 1.5
 
     Set the font border size used for the REPL and the console.
+
+``scale_with_window``
+    Default: ``auto``
+
+    Whether to scale the console with the window height. Can be ``yes``, ``no``,
+    or ``auto``, which follows the value of ``--osd-scale-by-window``.
 
 ``case_sensitive``
     Default: no on Windows, yes on other platforms.

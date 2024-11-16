@@ -118,6 +118,7 @@ struct mp_subtitle_opts {
     char *ass_styles_file;
     int ass_hinting;
     int ass_shaper;
+    double ass_prune_delay;
     bool ass_justify;
     bool sub_clear_on_seek;
     int teletext_page;
@@ -150,6 +151,9 @@ struct mp_osd_render_opts {
     float osd_bar_w;
     float osd_bar_h;
     float osd_bar_outline_size;
+    float osd_bar_marker_scale;
+    float osd_bar_marker_min_size;
+    int osd_bar_marker_style;
     float osd_scale;
     bool osd_scale_by_window;
     struct osd_style_opts *osd_style;
@@ -370,7 +374,6 @@ typedef struct MPOpts {
 
     struct input_opts *input_opts;
 
-    // may be NULL if encoding is not compiled-in
     struct encode_opts *encode_opts;
 
     char *ipc_path;

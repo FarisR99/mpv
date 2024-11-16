@@ -336,6 +336,7 @@ const struct m_sub_options mp_subtitle_sub_opts = {
             {"none", 0}, {"light", 1}, {"normal", 2}, {"native", 3})},
         {"sub-ass-shaper", OPT_CHOICE(ass_shaper,
             {"simple", 0}, {"complex", 1})},
+        {"sub-ass-prune-delay", OPT_DOUBLE(ass_prune_delay), M_RANGE(-1.0, DBL_MAX)},
         {"sub-ass-justify", OPT_BOOL(ass_justify)},
         {"sub-scale-by-window", OPT_BOOL(sub_scale_by_window)},
         {"sub-scale-with-window", OPT_BOOL(sub_scale_with_window)},
@@ -355,6 +356,7 @@ const struct m_sub_options mp_subtitle_sub_opts = {
         .sub_scale_by_window = true,
         .sub_use_margins = true,
         .sub_scale_with_window = true,
+        .ass_prune_delay = -1.0,
         .teletext_page = 0,
         .sub_scale = 1,
         .ass_vsfilter_color_compat = 1,
@@ -415,6 +417,10 @@ const struct m_sub_options mp_osd_render_sub_opts = {
         {"osd-bar-h", OPT_FLOAT(osd_bar_h), M_RANGE(0.1, 50)},
         {"osd-bar-outline-size", OPT_FLOAT(osd_bar_outline_size), M_RANGE(0, 1000.0)},
         {"osd-bar-border-size", OPT_ALIAS("osd-bar-outline-size")},
+        {"osd-bar-marker-scale", OPT_FLOAT(osd_bar_marker_scale), M_RANGE(0, 100.0)},
+        {"osd-bar-marker-min-size", OPT_FLOAT(osd_bar_marker_min_size), M_RANGE(0, 1000.0)},
+        {"osd-bar-marker-style", OPT_CHOICE(osd_bar_marker_style,
+            {"none", 0}, {"triangle", 1}, {"line", 2})},
         {"osd", OPT_SUBSTRUCT(osd_style, osd_style_conf)},
         {"osd-scale", OPT_FLOAT(osd_scale), M_RANGE(0, 100)},
         {"osd-scale-by-window", OPT_BOOL(osd_scale_by_window)},
@@ -427,6 +433,9 @@ const struct m_sub_options mp_osd_render_sub_opts = {
         .osd_bar_w = 75.0,
         .osd_bar_h = 3.125,
         .osd_bar_outline_size = 0.5,
+        .osd_bar_marker_scale = 1.3,
+        .osd_bar_marker_min_size = 1.6,
+        .osd_bar_marker_style = 1,
         .osd_scale = 1,
         .osd_scale_by_window = true,
     },
@@ -531,8 +540,10 @@ static const m_option_t mp_opts[] = {
     {"dump-stats", OPT_STRING(dump_stats),
         .flags = UPDATE_TERM | CONF_PRE_PARSE | M_OPT_FILE},
     {"msg-color", OPT_BOOL(msg_color), .flags = CONF_PRE_PARSE | UPDATE_TERM},
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
     {"log-file", OPT_STRING(log_file),
         .flags = CONF_PRE_PARSE | M_OPT_FILE | UPDATE_TERM},
+#endif
     {"msg-module", OPT_BOOL(msg_module), .flags = UPDATE_TERM},
     {"msg-time", OPT_BOOL(msg_time), .flags = UPDATE_TERM},
 #if HAVE_WIN32_DESKTOP
@@ -1030,7 +1041,7 @@ static const struct MPOpts mp_default_opts = {
     .play_frames = -1,
     .rebase_start_time = true,
     .keep_open_pause = true,
-    .image_display_duration = 1.0,
+    .image_display_duration = 5.0,
     .stream_id = { { [STREAM_AUDIO] = -1,
                      [STREAM_VIDEO] = -1,
                      [STREAM_SUB] = -1, },
@@ -1062,7 +1073,7 @@ static const struct MPOpts mp_default_opts = {
     },
     .image_exts = (char *[]){
         "avif", "bmp", "gif", "j2k", "jp2", "jpeg", "jpg", "jxl", "png",
-        "svg", "tga", "tif", "tiff", "webp", NULL
+        "qoi", "svg", "tga", "tif", "tiff", "webp", NULL
     },
 
     .sub_auto_exts = (char *[]){

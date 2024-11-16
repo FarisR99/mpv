@@ -159,15 +159,11 @@ struct load_action {
     bool play;
 };
 
-// U+25CB WHITE CIRCLE
-// U+25CF BLACK CIRCLE
 // U+00A0 NO-BREAK SPACE
-#define WHITECIRCLE "\xe2\x97\x8b"
-#define BLACKCIRCLE "\xe2\x97\x8f"
 #define NBSP "\xc2\xa0"
 
-const char list_current[] = BLACKCIRCLE NBSP;
-const char list_normal[] = WHITECIRCLE NBSP;
+const char list_current[] = BLACK_CIRCLE NBSP;
+const char list_normal[] = WHITE_CIRCLE NBSP;
 
 static int edit_filters(struct MPContext *mpctx, struct mp_log *log,
                         enum stream_type mediatype,
@@ -222,7 +218,9 @@ static int invoke_hook_handler(struct MPContext *mpctx, struct hook_handler *h)
     char *name = mp_tprintf(22, "@%"PRIi64, h->client_id);
     int r = mp_client_send_event(mpctx, name, reply_id, MPV_EVENT_HOOK, m);
     if (r < 0) {
-        MP_WARN(mpctx, "Sending hook command failed. Removing hook.\n");
+        MP_MSG(mpctx, mp_client_id_exists(mpctx, h->client_id) ? MSGL_WARN : MSGL_V,
+               "Failed sending hook command %s/%s. Removing hook.\n", h->client,
+               h->type);
         hook_remove(mpctx, h);
         mp_wakeup_core(mpctx); // repeat next iteration to finish
     }
@@ -1942,20 +1940,10 @@ static int property_switch_track(void *ctx, struct m_property *prop,
         return M_PROPERTY_OK;
     case M_PROPERTY_PRINT:
         if (track) {
-            char *lang = track->lang;
-            if (!lang && type != STREAM_VIDEO) {
-                lang = "unknown";
-            } else if (!lang) {
-                lang = "";
-            }
-
-            if (track->title) {
-                *(char **)arg = talloc_asprintf(NULL, "(%d) %s (\"%s\")",
-                                           track->user_tid, lang, track->title);
-            } else {
-                *(char **)arg = talloc_asprintf(NULL, "(%d) %s",
-                                                track->user_tid, lang);
-            }
+            void *talloc_ctx = talloc_new(NULL);
+            *(char **)arg = talloc_asprintf(NULL, "(%d) %s", track->user_tid,
+                mp_format_track_metadata(talloc_ctx, track, true));
+            talloc_free(talloc_ctx);
         } else {
             const char *msg = "no";
             if (!mpctx->playback_initialized &&
@@ -2104,17 +2092,11 @@ static const char *track_type_name(struct track *t)
     return NULL;
 }
 
-
 static char *append_track_info(char *res, struct track *track)
 {
     res = talloc_strdup_append(res, track->selected ? list_current : list_normal);
     res = talloc_asprintf_append(res, "(%d) ", track->user_tid);
-    if (track->title)
-        res = talloc_asprintf_append(res, "'%s' ", track->title);
-    if (track->lang)
-        res = talloc_asprintf_append(res, "(%s) ", track->lang);
-    if (track->is_external)
-        res = talloc_asprintf_append(res, "(external) ");
+    res = talloc_strdup_append(res, mp_format_track_metadata(res, track, true));
 
     return res;
 }
@@ -3130,8 +3112,9 @@ static int mp_property_sub_pos(void *ctx, struct m_property *prop,
     MPContext *mpctx = ctx;
     struct MPOpts *opts = mpctx->opts;
     int track_ind = *(int *)prop->priv;
-    if (action == M_PROPERTY_PRINT) {
-        *(char **)arg = talloc_asprintf(NULL, "%4.2f%%/100", opts->subs_shared->sub_pos[track_ind]);
+    if (action == M_PROPERTY_PRINT || action == M_PROPERTY_FIXED_LEN_PRINT) {
+        *(char **)arg = mp_format_double(NULL, opts->subs_shared->sub_pos[track_ind], 2,
+                                         false, true, action != M_PROPERTY_FIXED_LEN_PRINT);
         return M_PROPERTY_OK;
     }
     return mp_property_generic_option(mpctx, prop, action, arg);
@@ -6510,7 +6493,7 @@ static void cmd_delete_watch_later_config(void *p)
     struct MPContext *mpctx = cmd->mpctx;
 
     char *filename = cmd->args[0].v.s;
-    if (filename && !*filename)
+    if (filename && !filename[0])
         filename = NULL;
     mp_delete_watch_later_conf(mpctx, filename);
 }
@@ -6573,7 +6556,7 @@ static void cmd_key(void *p)
     } else {
         int code = mp_input_get_key_from_name(key_name);
         if (code < 0) {
-            MP_ERR(mpctx, "%s is not a valid input name.\n", key_name);
+            MP_ERR(mpctx, "'%s' is not a valid input name.\n", key_name);
             cmd->success = false;
             return;
         }
@@ -6587,14 +6570,15 @@ static void cmd_key_bind(void *p)
     struct mp_cmd_ctx *cmd = p;
     struct MPContext *mpctx = cmd->mpctx;
 
-    int code = mp_input_get_key_from_name(cmd->args[0].v.s);
-    if (code < 0) {
-        MP_ERR(mpctx, "%s is not a valid input name.\n", cmd->args[0].v.s);
-        cmd->success = false;
-        return;
-    }
+    const char *key = cmd->args[0].v.s;
     const char *target_cmd = cmd->args[1].v.s;
-    mp_input_bind_key(mpctx->input, code, bstr0(target_cmd));
+    const char *comment = cmd->args[2].v.s;
+    if (comment && !comment[0])
+        comment = NULL;
+    if (!mp_input_bind_key(mpctx->input, key, bstr0(target_cmd), comment)) {
+        MP_ERR(mpctx, "'%s' is not a valid input name.\n", key);
+        cmd->success = false;
+    }
 }
 
 static void cmd_apply_profile(void *p)
@@ -7205,7 +7189,8 @@ const struct mp_cmd_def mp_cmds[] = {
                                 {"single", 0}, {"double", 1}),
                                 .flags = MP_CMD_OPT_ARG}}},
     { "keybind", cmd_key_bind, { {"name", OPT_STRING(v.s)},
-                                 {"cmd", OPT_STRING(v.s)} }},
+                                 {"cmd", OPT_STRING(v.s)},
+                                 {"comment", OPT_STRING(v.s), .flags = MP_CMD_OPT_ARG} }},
     { "keypress", cmd_key, { {"name", OPT_STRING(v.s)},
                              {"scale", OPT_DOUBLE(v.d), OPTDEF_DOUBLE(1)} },
         .priv = &(const int){0}},

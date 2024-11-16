@@ -31,7 +31,7 @@ The Interface
 pl prev
     =============   ================================================
     left-click      play previous file in playlist
-    right-click     open the playlist selector
+    right-click     show the playlist
     shift+L-click   show the playlist
     middle-click    show the playlist
     =============   ================================================
@@ -39,7 +39,7 @@ pl prev
 pl next
     =============   ================================================
     left-click      play next file in playlist
-    right-click     open the playlist selector
+    right-click     show the playlist
     shift+L-click   show the playlist
     middle-click    show the playlist
     =============   ================================================
@@ -66,14 +66,14 @@ play
 skip back
     =============   ================================================
     left-click      go to beginning of chapter / previous chapter
-    right-click     show chapters
+    right-click     open the chapter selector
     shift+L-click   show chapters
     =============   ================================================
 
 skip frwd
     =============   ================================================
     left-click      go to next chapter
-    right-click     show chapters
+    right-click     open the chapter selector
     shift+L-click   show chapters
     =============   ================================================
 
@@ -121,7 +121,13 @@ vol
 fs
     =============   ================================================
     left-click      toggle fullscreen
+    right-click     toggle whether the window is maximized
     =============   ================================================
+
+Since mpv 0.40.0, it is possible to configure the commands to run with mouse
+actions on some interface elements, and the default behaviors of several
+elements were changed. If you miss some older behaviors, look at
+``etc/restore-osc-bindings.conf`` in the mpv git repository.
 
 Key Bindings
 ~~~~~~~~~~~~
@@ -409,12 +415,6 @@ Configurable Options
     Update chapter markers positions on duration changes, e.g. live streams.
     The updates are unoptimized - consider disabling it on very low-end systems.
 
-``chapters_osd``, ``playlist_osd``
-    Default: yes
-
-    Whether to display the chapters/playlist at the OSD when left-clicking the
-    next/previous OSC buttons, respectively.
-
 ``chapter_fmt``
     Default: ``Chapter: %s``
 
@@ -506,13 +506,13 @@ clicked. ``mbtn_mid`` commands are also triggered with ``shift+mbtn_left``.
 
 ``playlist_prev_mbtn_mid_command=show-text ${playlist} 3000``
 
-``playlist_prev_mbtn_right_command=script-binding select/select-playlist; script-message-to osc osc-hide``
+``playlist_prev_mbtn_right_command=show-text ${playlist} 3000``
 
 ``playlist_next_mbtn_left_command=playlist-next; show-text ${playlist} 3000``
 
 ``playlist_next_mbtn_mid_command=show-text ${playlist} 3000``
 
-``playlist_next_mbtn_right_command=script-binding select/select-playlist; script-message-to osc osc-hide``
+``playlist_next_mbtn_right_command=show-text ${playlist} 3000``
 
 ``play_pause_mbtn_left_command=cycle pause``
 
@@ -520,13 +520,13 @@ clicked. ``mbtn_mid`` commands are also triggered with ``shift+mbtn_left``.
 
 ``play_pause_mbtn_right_command=cycle-values loop-file inf no``
 
-``chapter_prev_mbtn_left_command=no-osd add chapter -1; show-text ${chapter-list} 3000``
+``chapter_prev_mbtn_left_command=osd-msg add chapter -1``
 
 ``chapter_prev_mbtn_mid_command=show-text ${chapter-list} 3000``
 
 ``chapter_prev_mbtn_right_command=script-binding select/select-chapter; script-message-to osc osc-hide``
 
-``chapter_next_mbtn_left_command=no-osd add chapter 1; show-text ${chapter-list} 3000``
+``chapter_next_mbtn_left_command=osd-msg add chapter 1``
 
 ``chapter_next_mbtn_mid_command=show-text ${chapter-list} 3000``
 
@@ -534,9 +534,9 @@ clicked. ``mbtn_mid`` commands are also triggered with ``shift+mbtn_left``.
 
 ``audio_track_mbtn_left_command=script-binding select/select-aid; script-message-to osc osc-hide``
 
-``audio_track_mbtn_mid_command=show-text ${track-list/audio} 2000``
+``audio_track_mbtn_mid_command=show-text ${track-list/audio} 3000``
 
-``audio_track_mbtn_right_command=show-text ${track-list/audio} 2000``
+``audio_track_mbtn_right_command=cycle audio``
 
 ``audio_track_wheel_down_command=cycle audio``
 
@@ -544,9 +544,9 @@ clicked. ``mbtn_mid`` commands are also triggered with ``shift+mbtn_left``.
 
 ``sub_track_mbtn_left_command=script-binding select/select-sid; script-message-to osc osc-hide``
 
-``sub_track_mbtn_mid_command=show-text ${track-list/sub} 2000``
+``sub_track_mbtn_mid_command=show-text ${track-list/sub} 3000``
 
-``sub_track_mbtn_right_command=show-text ${track-list/sub} 2000``
+``sub_track_mbtn_right_command=cycle sub``
 
 ``sub_track_wheel_down_command=cycle sub``
 
@@ -561,6 +561,12 @@ clicked. ``mbtn_mid`` commands are also triggered with ``shift+mbtn_left``.
 ``volume_wheel_down_command=add volume -5``
 
 ``volume_wheel_up_command=add volume 5``
+
+``fullscreen_mbtn_left_command="cycle fullscreen"``
+
+``fullscreen_mbtn_mid_command=``
+
+``fullscreen_mbtn_right_command="cycle window-maximized"``
 
 Script Commands
 ~~~~~~~~~~~~~~~
