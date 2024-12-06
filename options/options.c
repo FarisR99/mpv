@@ -88,6 +88,9 @@ extern const struct m_obj_list vo_obj_list;
 
 extern const struct m_sub_options ao_conf;
 
+extern const struct m_sub_options dvd_conf;
+extern const struct m_sub_options clipboard_conf;
+
 extern const struct m_sub_options opengl_conf;
 extern const struct m_sub_options vulkan_conf;
 extern const struct m_sub_options vulkan_display_conf;
@@ -100,6 +103,8 @@ extern const struct m_sub_options wayland_conf;
 extern const struct m_sub_options wingl_conf;
 extern const struct m_sub_options vaapi_conf;
 extern const struct m_sub_options egl_conf;
+
+extern const struct m_sub_options mp_sub_filter_opts;
 
 static const struct m_sub_options screenshot_conf = {
     .opts = image_writer_opts,
@@ -160,6 +165,7 @@ static const m_option_t mp_vo_opt_list[] = {
     {"video-crop", OPT_RECT(video_crop), .flags = UPDATE_IMGPAR},
     {"video-unscaled", OPT_CHOICE(unscaled,
         {"no", 0}, {"yes", 1}, {"downscale-big", 2})},
+    {"video-recenter", OPT_BOOL(recenter)},
     {"wid", OPT_INT64(WinID)},
     {"screen", OPT_CHOICE(screen_id, {"default", -1}), M_RANGE(0, 32)},
     {"screen-name", OPT_STRING(screen_name)},
@@ -276,29 +282,6 @@ const struct m_sub_options vo_sub_opts = {
 };
 
 #undef OPT_BASE_STRUCT
-#define OPT_BASE_STRUCT struct mp_sub_filter_opts
-
-const struct m_sub_options mp_sub_filter_opts = {
-    .opts = (const struct m_option[]){
-        {"sub-filter-sdh", OPT_BOOL(sub_filter_SDH)},
-        {"sub-filter-sdh-harder", OPT_BOOL(sub_filter_SDH_harder)},
-        {"sub-filter-sdh-enclosures", OPT_STRING(sub_filter_SDH_enclosures)},
-        {"sub-filter-regex-enable", OPT_BOOL(rf_enable)},
-        {"sub-filter-regex-plain", OPT_BOOL(rf_plain)},
-        {"sub-filter-regex", OPT_STRINGLIST(rf_items)},
-        {"sub-filter-jsre", OPT_STRINGLIST(jsre_items)},
-        {"sub-filter-regex-warn", OPT_BOOL(rf_warn)},
-        {0}
-    },
-    .size = sizeof(OPT_BASE_STRUCT),
-    .defaults = &(OPT_BASE_STRUCT){
-        .sub_filter_SDH_enclosures = "([\uFF08",
-        .rf_enable = true,
-    },
-    .change_flags = UPDATE_SUB_FILT,
-};
-
-#undef OPT_BASE_STRUCT
 #define OPT_BASE_STRUCT struct mp_subtitle_opts
 
 const struct m_sub_options mp_subtitle_sub_opts = {
@@ -315,8 +298,8 @@ const struct m_sub_options mp_subtitle_sub_opts = {
         {"sub-gray", OPT_BOOL(sub_gray)},
         {"sub-ass", OPT_BOOL(ass_enabled), .flags = UPDATE_SUB_HARD},
         {"sub-scale", OPT_FLOAT(sub_scale), M_RANGE(0, 100)},
-        {"sub-ass-line-spacing", OPT_FLOAT(ass_line_spacing),
-            M_RANGE(-1000, 1000)},
+        {"sub-line-spacing", OPT_FLOAT(sub_line_spacing), M_RANGE(-1000, 1000)},
+        {"sub-ass-line-spacing", OPT_REPLACED("sub-line-spacing")},
         {"sub-use-margins", OPT_BOOL(sub_use_margins)},
         {"sub-ass-force-margins", OPT_BOOL(ass_use_margins)},
         {"sub-ass-vsfilter-color-compat", OPT_CHOICE(ass_vsfilter_color_compat,
@@ -332,10 +315,11 @@ const struct m_sub_options mp_subtitle_sub_opts = {
             .flags = UPDATE_SUB_HARD},
         {"sub-ass-styles", OPT_STRING(ass_styles_file),
             .flags = M_OPT_FILE | UPDATE_SUB_HARD},
-        {"sub-ass-hinting", OPT_CHOICE(ass_hinting,
+        {"sub-hinting", OPT_CHOICE(sub_hinting,
             {"none", 0}, {"light", 1}, {"normal", 2}, {"native", 3})},
-        {"sub-ass-shaper", OPT_CHOICE(ass_shaper,
-            {"simple", 0}, {"complex", 1})},
+        {"sub-ass-hinting", OPT_REPLACED("sub-hinting")},
+        {"sub-shaper", OPT_CHOICE(sub_shaper, {"simple", 0}, {"complex", 1})},
+        {"sub-ass-shaper", OPT_REPLACED("sub-shaper")},
         {"sub-ass-prune-delay", OPT_DOUBLE(ass_prune_delay), M_RANGE(-1.0, DBL_MAX)},
         {"sub-ass-justify", OPT_BOOL(ass_justify)},
         {"sub-scale-by-window", OPT_BOOL(sub_scale_by_window)},
@@ -362,7 +346,7 @@ const struct m_sub_options mp_subtitle_sub_opts = {
         .ass_vsfilter_color_compat = 1,
         .ass_use_video_data = 2,
         .ass_video_aspect = 0,
-        .ass_shaper = 1,
+        .sub_shaper = 1,
         .use_embedded_fonts = true,
     },
     .change_flags = UPDATE_OSD,
@@ -411,33 +395,21 @@ const struct m_sub_options mp_subtitle_shared_sub_opts = {
 
 const struct m_sub_options mp_osd_render_sub_opts = {
     .opts = (const struct m_option[]){
-        {"osd-bar-align-x", OPT_FLOAT(osd_bar_align_x), M_RANGE(-1.0, +1.0)},
-        {"osd-bar-align-y", OPT_FLOAT(osd_bar_align_y), M_RANGE(-1.0, +1.0)},
-        {"osd-bar-w", OPT_FLOAT(osd_bar_w), M_RANGE(1, 100)},
-        {"osd-bar-h", OPT_FLOAT(osd_bar_h), M_RANGE(0.1, 50)},
-        {"osd-bar-outline-size", OPT_FLOAT(osd_bar_outline_size), M_RANGE(0, 1000.0)},
-        {"osd-bar-border-size", OPT_ALIAS("osd-bar-outline-size")},
-        {"osd-bar-marker-scale", OPT_FLOAT(osd_bar_marker_scale), M_RANGE(0, 100.0)},
-        {"osd-bar-marker-min-size", OPT_FLOAT(osd_bar_marker_min_size), M_RANGE(0, 1000.0)},
-        {"osd-bar-marker-style", OPT_CHOICE(osd_bar_marker_style,
-            {"none", 0}, {"triangle", 1}, {"line", 2})},
         {"osd", OPT_SUBSTRUCT(osd_style, osd_style_conf)},
+        {"osd-bar", OPT_SUBSTRUCT(osd_bar_style, osd_bar_style_conf)},
         {"osd-scale", OPT_FLOAT(osd_scale), M_RANGE(0, 100)},
         {"osd-scale-by-window", OPT_BOOL(osd_scale_by_window)},
+        {"osd-selected-color", OPT_COLOR(osd_selected_color)},
+        {"osd-selected-outline-color", OPT_COLOR(osd_selected_outline_color)},
         {"force-rgba-osd-rendering", OPT_BOOL(force_rgba_osd)},
         {0}
     },
     .size = sizeof(OPT_BASE_STRUCT),
     .defaults = &(OPT_BASE_STRUCT){
-        .osd_bar_align_y = 0.5,
-        .osd_bar_w = 75.0,
-        .osd_bar_h = 3.125,
-        .osd_bar_outline_size = 0.5,
-        .osd_bar_marker_scale = 1.3,
-        .osd_bar_marker_min_size = 1.6,
-        .osd_bar_marker_style = 1,
         .osd_scale = 1,
         .osd_scale_by_window = true,
+        .osd_selected_color = {250, 189, 47, 255},
+        .osd_selected_outline_color = {0, 0, 0, 255},
     },
     .change_flags = UPDATE_OSD,
 };
@@ -454,22 +426,6 @@ const struct m_sub_options cuda_conf = {
     .size = sizeof(struct cuda_opts),
     .defaults = &(const struct cuda_opts){
         .cuda_device = -1,
-    },
-};
-
-#undef OPT_BASE_STRUCT
-#define OPT_BASE_STRUCT struct dvd_opts
-
-const struct m_sub_options dvd_conf = {
-    .opts = (const struct m_option[]){
-        {"dvd-device", OPT_STRING(device), .flags = M_OPT_FILE},
-        {"dvd-speed", OPT_INT(speed)},
-        {"dvd-angle", OPT_INT(angle), M_RANGE(1, 99)},
-        {0}
-    },
-    .size = sizeof(struct dvd_opts),
-    .defaults = &(const struct dvd_opts){
-        .angle = 1,
     },
 };
 
@@ -507,17 +463,17 @@ static const m_option_t mp_opts[] = {
      .offset = -1},
 
     // handled in m_config.c
-    { "include", CONF_TYPE_STRING, M_OPT_FILE, .offset = -1},
-    { "profile", CONF_TYPE_STRING_LIST, 0, .offset = -1},
-    { "show-profile", CONF_TYPE_STRING, CONF_NOCFG | M_OPT_NOPROP |
+    {"include", CONF_TYPE_STRING, M_OPT_FILE, .offset = -1},
+    {"profile", CONF_TYPE_STRING_LIST, 0, .offset = -1},
+    {"show-profile", CONF_TYPE_STRING, CONF_NOCFG | M_OPT_NOPROP |
         M_OPT_OPTIONAL_PARAM,  .offset = -1},
-    { "list-options", &m_option_type_dummy_flag, CONF_NOCFG | M_OPT_NOPROP,
+    {"list-options", &m_option_type_dummy_flag, CONF_NOCFG | M_OPT_NOPROP,
         .offset = -1},
     {"list-properties", OPT_BOOL(property_print_help),
      .flags = CONF_NOCFG | M_OPT_NOPROP},
-    { "help", CONF_TYPE_STRING, CONF_NOCFG | M_OPT_NOPROP | M_OPT_OPTIONAL_PARAM,
+    {"help", CONF_TYPE_STRING, CONF_NOCFG | M_OPT_NOPROP | M_OPT_OPTIONAL_PARAM,
         .offset = -1},
-    { "h", CONF_TYPE_STRING, CONF_NOCFG | M_OPT_NOPROP | M_OPT_OPTIONAL_PARAM,
+    {"h", CONF_TYPE_STRING, CONF_NOCFG | M_OPT_NOPROP | M_OPT_OPTIONAL_PARAM,
         .offset = -1},
 
     {"list-protocols", OPT_PRINT(stream_print_proto_list)},
@@ -593,7 +549,7 @@ static const m_option_t mp_opts[] = {
 // ------------------------- stream options --------------------
 
 #if HAVE_DVDNAV
-    {"", OPT_SUBSTRUCT(dvd_opts, dvd_conf)},
+    {"dvd", OPT_SUBSTRUCT(dvd_opts, dvd_conf)},
 #endif
     {"edition", OPT_CHOICE(edition_id, {"auto", -1}), M_RANGE(0, 8190)},
 #if HAVE_LIBBLURAY
@@ -747,7 +703,7 @@ static const m_option_t mp_opts[] = {
 
     {"", OPT_SUBSTRUCT(subs_rend, mp_subtitle_sub_opts)},
     {"", OPT_SUBSTRUCT(subs_shared, mp_subtitle_shared_sub_opts)},
-    {"", OPT_SUBSTRUCT(subs_filt, mp_sub_filter_opts)},
+    {"sub-filter", OPT_SUBSTRUCT(subs_filt, mp_sub_filter_opts)},
     {"", OPT_SUBSTRUCT(osd_rend, mp_osd_render_sub_opts)},
 
     {"osd-bar", OPT_BOOL(osd_bar_visible), .flags = UPDATE_OSD},
@@ -915,6 +871,8 @@ static const m_option_t mp_opts[] = {
     {"", OPT_SUBSTRUCT(resample_opts, resample_conf)},
 
     {"", OPT_SUBSTRUCT(input_opts, input_config)},
+
+    {"clipboard", OPT_SUBSTRUCT(clipboard_opts, clipboard_conf)},
 
     {"", OPT_SUBSTRUCT(vo, vo_sub_opts)},
     {"", OPT_SUBSTRUCT(demux_opts, demux_conf)},

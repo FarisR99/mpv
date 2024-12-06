@@ -19,7 +19,7 @@ local function detect_platform()
     local platform = mp.get_property_native('platform')
     if platform == 'darwin' or platform == 'windows' then
         return platform
-    elseif os.getenv('WAYLAND_DISPLAY') then
+    elseif os.getenv('WAYLAND_DISPLAY') or os.getenv('WAYLAND_SOCKET') then
         return 'wayland'
     end
     return 'x11'
@@ -31,15 +31,12 @@ local platform = detect_platform()
 local opts = {
     font = "",
     font_size = 24,
-    border_size = 1.5,
+    border_size = 1.65,
     scale_with_window = "auto",
     case_sensitive = platform ~= 'windows' and true or false,
     history_dedup = true,
     font_hw_ratio = 'auto',
 }
-
--- Apply user-set options
-require 'mp.options'.read_options(opts)
 
 local styles = {
     -- Colors are stolen from base16 Eighties by Chris Kempson
@@ -79,7 +76,6 @@ local line = ''
 local cursor = 1
 local default_prompt = '>'
 local prompt = default_prompt
-local bottom_left_margin = 6
 local default_id = 'default'
 local id = default_id
 local histories = {[id] = {}}
@@ -106,6 +102,8 @@ local selected_match = 1
 local first_match_to_print = 1
 local default_item
 
+local complete
+local cycle_through_suggestions
 local set_active
 
 
@@ -278,7 +276,7 @@ local function calculate_max_log_lines()
 
     return math.floor((select(2, get_scaled_osd_dimensions())
                        * (1 - global_margins.t - global_margins.b)
-                       - bottom_left_margin)
+                       - mp.get_property_native('osd-margin-y'))
                       / opts.font_size
                       -- Subtract 1 for the input line and 0.5 for the empty
                       -- line between the log and the input line.
@@ -366,7 +364,8 @@ local function format_table(list, width_max, rows_max)
                                   or '%-' .. math.min(column_widths[column], 99) .. 's'
             columns[column] = ass_escape(string.format(format_string, list[i]))
 
-            if i == selected_suggestion_index then
+            if i == selected_suggestion_index or
+               (i == 1 and selected_suggestion_index == 0) then
                 columns[column] = styles.selected_suggestion .. columns[column]
                                   .. '{\\b0}'.. styles.suggestion
             end
@@ -377,8 +376,8 @@ local function format_table(list, width_max, rows_max)
     return table.concat(rows, ass_escape('\n')), row_count
 end
 
-local function fuzzy_find(needle, haystacks)
-    local result = require 'mp.fzy'.filter(needle, haystacks)
+local function fuzzy_find(needle, haystacks, case_sensitive)
+    local result = require 'mp.fzy'.filter(needle, haystacks, case_sensitive)
     if line ~= '' then -- Prevent table.sort() from reordering the items.
         table.sort(result, function (i, j)
             return i[3] > j[3]
@@ -388,6 +387,11 @@ local function fuzzy_find(needle, haystacks)
         result[i] = value[1]
     end
     return result
+end
+
+local function mpv_color_to_ass(color)
+    return color:sub(8,9) .. color:sub(6,7) ..  color:sub(4,5),
+           string.format('%x', 255 - tonumber('0x' .. color:sub(2,3)))
 end
 
 local function populate_log_with_matches()
@@ -431,13 +435,17 @@ local function populate_log_with_matches()
         local style = ''
         local terminal_style = ''
 
-        if i == selected_match then
-            style = styles.selected_suggestion
-            terminal_style = terminal_styles.selected_suggestion
-        end
         if matches[i].index == default_item then
-            style = style .. styles.default_item
-            terminal_style = terminal_style .. terminal_styles.default_item
+            style = styles.default_item
+            terminal_style = terminal_styles.default_item
+        end
+        if i == selected_match then
+            local color, alpha = mpv_color_to_ass(mp.get_property('osd-selected-color'))
+            local outline_color, outline_alpha =
+                mpv_color_to_ass(mp.get_property('osd-selected-outline-color'))
+            style = style .. "{\\b1\\1c&H" .. color .. "&\\1a&H" .. alpha ..
+                             "&\\3c&H" .. outline_color .. "&\\3a&H" .. outline_alpha .. "&}"
+            terminal_style = terminal_style .. terminal_styles.selected_suggestion
         end
 
         log[#log + 1] = {
@@ -468,7 +476,8 @@ local function print_to_terminal()
 
     local suggestions = ''
     for i, suggestion in ipairs(suggestion_buffer) do
-        if i == selected_suggestion_index then
+        if i == selected_suggestion_index or
+           (i == 1 and selected_suggestion_index == 0) then
             suggestions = suggestions .. terminal_styles.selected_suggestion ..
                           suggestion .. '\027[0m'
         else
@@ -515,6 +524,9 @@ local function update()
 
     local screenx, screeny = get_scaled_osd_dimensions()
 
+    local marginx = mp.get_property_native('osd-margin-x')
+    local marginy = mp.get_property_native('osd-margin-y')
+
     local coordinate_top = math.floor(global_margins.t * screeny + 0.5)
     local clipping_coordinates = '0,' .. coordinate_top .. ',' ..
                                  screenx .. ',' .. screeny
@@ -523,10 +535,10 @@ local function update()
     local font = get_font()
     local style = '{\\r' ..
                   '\\1a&H00&\\3a&H00&\\1c&Heeeeee&\\3c&H111111&' ..
-                  (has_shadow and '\\4a&H99&\\4c&H000000&' or '') ..
+                  (has_shadow and '\\4a&H99&\\4c&H000000&\\xshad0\\yshad1' or '') ..
                   (font and '\\fn' .. font or '') ..
                   '\\fs' .. opts.font_size ..
-                  '\\bord' .. opts.border_size .. '\\xshad0\\yshad1\\fsp0' ..
+                  '\\bord' .. opts.border_size .. '\\fsp0' ..
                   (selectable_items and '\\q2' or '\\q1') ..
                   '\\clip(' .. clipping_coordinates .. ')}'
     -- Create the cursor glyph as an ASS drawing. ASS will draw the cursor
@@ -552,8 +564,10 @@ local function update()
     local suggestion_ass = ''
     if next(suggestion_buffer) then
         -- Estimate how many characters fit in one line
-        local width_max = math.floor((screenx - bottom_left_margin -
-                                     mp.get_property_native('osd-margin-x') * 2 * screeny / 720)
+        -- Even with bottom-left anchoring,
+        -- libass/ass_render.c:ass_render_event() subtracts --osd-margin-x from
+        -- the maximum text width twice.
+        local width_max = math.floor((screenx - marginx - marginx * 2 / scale_factor())
                                      / opts.font_size * get_font_hw_ratio())
 
         local suggestions, rows = format_table(suggestion_buffer, width_max, lines_max)
@@ -577,7 +591,7 @@ local function update()
 
     ass:new_event()
     ass:an(1)
-    ass:pos(bottom_left_margin, screeny - bottom_left_margin - global_margins.b * screeny)
+    ass:pos(marginx, screeny - marginy - global_margins.b * screeny)
     ass:append(log_ass .. '\\N')
     ass:append(suggestion_ass)
     ass:append(style .. ass_escape(prompt) .. ' ' .. before_cur)
@@ -588,7 +602,7 @@ local function update()
     -- cursor appear in front of the text.
     ass:new_event()
     ass:an(1)
-    ass:pos(bottom_left_margin, screeny - bottom_left_margin - global_margins.b * screeny)
+    ass:pos(marginx, screeny - marginy - global_margins.b * screeny)
     ass:append(style .. '{\\alpha&HFF&}' .. ass_escape(prompt) .. ' ' .. before_cur)
     ass:append(cglyph)
     ass:append(style .. '{\\alpha&HFF&}' .. after_cur)
@@ -643,6 +657,17 @@ local function history_add(text)
     history[#history + 1] = text
 end
 
+local function handle_cursor_move()
+    -- Don't show completions after a command is entered because they move its
+    -- output up, and allow clearing completions by emptying the line.
+    if line == '' then
+        suggestion_buffer = {}
+        update()
+    else
+        complete()
+    end
+end
+
 local function handle_edit()
     if selectable_items then
         matches = {}
@@ -651,10 +676,13 @@ local function handle_edit()
         for i, match in ipairs(fuzzy_find(line, selectable_items)) do
             matches[i] = { index = match, text = selectable_items[match] }
         end
+
+        update()
+
+        return
     end
 
-    suggestion_buffer = {}
-    update()
+    handle_cursor_move()
 
     if input_caller then
         mp.commandv('script-message-to', input_caller, 'input-event', 'edited',
@@ -697,15 +725,13 @@ end
 -- Move the cursor to the next character (Right)
 local function next_char()
     cursor = next_utf8(line, cursor)
-    suggestion_buffer = {}
-    update()
+    handle_cursor_move()
 end
 
 -- Move the cursor to the previous character (Left)
 local function prev_char()
     cursor = prev_utf8(line, cursor)
-    suggestion_buffer = {}
-    update()
+    handle_cursor_move()
 end
 
 -- Clear the current line (Ctrl+C)
@@ -784,16 +810,13 @@ local function handle_enter()
         line = #matches > 0 and matches[selected_match].text or ''
         cursor = #line + 1
         log_buffers[id] = {}
-        update()
+        handle_edit()
         unbind_mouse()
         return
     end
 
     if line == '' and input_caller == nil then
         return
-    end
-    if history[#history] ~= line and line ~= '' then
-        history_add(line)
     end
 
     if selectable_items then
@@ -806,6 +829,10 @@ local function handle_enter()
         mp.commandv('script-message-to', input_caller, 'input-event', 'submit',
                     utils.format_json({line}))
     else
+        if selected_suggestion_index == 0 then
+            cycle_through_suggestions()
+        end
+
         -- match "help [<text>]", return <text> or "", strip all whitespace
         local help = line:match('^%s*help%s+(.-)%s*$') or
                      (line:match('^%s*help$') and '')
@@ -816,6 +843,10 @@ local function handle_enter()
         end
     end
 
+    if history[#history] ~= line and line ~= '' then
+        history_add(line)
+    end
+
     clear()
 end
 
@@ -823,7 +854,8 @@ local function determine_hovered_item()
     local height = select(2, get_scaled_osd_dimensions())
     local y = mp.get_property_native('mouse-pos').y / scale_factor()
     local log_bottom_pos = height * (1 - global_margins.b)
-                           - bottom_left_margin - 1.5 * opts.font_size
+                           - mp.get_property_native('osd-margin-y')
+                           - 1.5 * opts.font_size
 
     if y > log_bottom_pos then
         return
@@ -895,8 +927,7 @@ local function go_history(new_pos)
     end
     cursor = line:len() + 1
     insert_mode = false
-    suggestion_buffer = {}
-    update()
+    handle_edit()
 end
 
 -- Go to the specified relative position in the command history (Up, Down)
@@ -1012,30 +1043,26 @@ local function prev_word()
     -- string in order to do a "backwards" find. This wouldn't be as annoying
     -- to do if Lua didn't insist on 1-based indexing.
     cursor = line:len() - select(2, line:reverse():find('%s*[^%s]*', line:len() - cursor + 2)) + 1
-    suggestion_buffer = {}
-    update()
+    handle_cursor_move()
 end
 
 -- Move to the end of the current word, or if already at the end, the end of
 -- the next word. (Ctrl+Right)
 local function next_word()
     cursor = select(2, line:find('%s*[^%s]*', cursor)) + 1
-    suggestion_buffer = {}
-    update()
+    handle_cursor_move()
 end
 
 -- Move the cursor to the beginning of the line (HOME)
 local function go_home()
     cursor = 1
-    suggestion_buffer = {}
-    update()
+    handle_cursor_move()
 end
 
 -- Move the cursor to the end of the line (END)
 local function go_end()
     cursor = line:len() + 1
-    suggestion_buffer = {}
-    update()
+    handle_cursor_move()
 end
 
 -- Delete from the cursor to the beginning of the word (Ctrl+Backspace)
@@ -1091,6 +1118,10 @@ local function get_clipboard(clip)
             return res.stdout
         end
     elseif platform == 'wayland' then
+        -- Wayland clipboard is only updated on window focus
+        if clip and mp.get_property_native('focused') then
+            return mp.get_property('clipboard/text', '')
+        end
         local res = utils.subprocess({
             args = { 'wl-paste', clip and '-n' or  '-np' },
             playback_only = false,
@@ -1099,30 +1130,7 @@ local function get_clipboard(clip)
             return res.stdout
         end
     elseif platform == 'windows' then
-        local res = utils.subprocess({
-            args = { 'powershell', '-NoProfile', '-Command', [[& {
-                Trap {
-                    Write-Error -ErrorRecord $_
-                    Exit 1
-                }
-
-                $clip = ""
-                if (Get-Command "Get-Clipboard" -errorAction SilentlyContinue) {
-                    $clip = Get-Clipboard -Raw -Format Text -TextFormatType UnicodeText
-                } else {
-                    Add-Type -AssemblyName PresentationCore
-                    $clip = [Windows.Clipboard]::GetText()
-                }
-
-                $clip = $clip -Replace "`r",""
-                $u8clip = [System.Text.Encoding]::UTF8.GetBytes($clip)
-                [Console]::OpenStandardOutput().Write($u8clip, 0, $u8clip.Length)
-            }]] },
-            playback_only = false,
-        })
-        if not res.error then
-            return res.stdout
-        end
+        return mp.get_property('clipboard/text', '')
     elseif platform == 'darwin' then
         local res = utils.subprocess({
             args = { 'pbpaste' },
@@ -1168,20 +1176,6 @@ local function property_list()
 
     for _, sub_property in pairs({'video', 'audio', 'sub', 'sub2'}) do
         properties[#properties + 1] = 'current-tracks/' .. sub_property
-    end
-
-    for _, option in ipairs(mp.get_property_native('options')) do
-        properties[#properties + 1] = 'options/' .. option
-        properties[#properties + 1] = 'file-local-options/' .. option
-        properties[#properties + 1] = 'option-info/' .. option
-
-        for _, sub_property in pairs({
-            'name', 'type', 'set-from-commandline', 'set-locally',
-            'expects-file', 'default-value', 'min', 'max', 'choices',
-        }) do
-            properties[#properties + 1] = 'option-info/' .. option .. '/' ..
-                                          sub_property
-        end
     end
 
     return properties
@@ -1270,10 +1264,10 @@ local function file_list(directory)
     return files
 end
 
-local function handle_file_completion(before_cur, path_pos)
+local function handle_file_completion(before_cur)
     local directory, last_component_pos =
-        before_cur:sub(path_pos):match('(.-)()[^' .. path_separator ..']*$')
-    completion_pos = path_pos + last_component_pos - 1
+        before_cur:sub(completion_pos):match('(.-)()[^' .. path_separator ..']*$')
+    completion_pos = completion_pos + last_component_pos - 1
 
     if directory:find('^~' .. path_separator) then
         local home = mp.command_native({'expand-path', '~/'})
@@ -1291,7 +1285,7 @@ local function handle_file_completion(before_cur, path_pos)
     return file_list(directory), before_cur
 end
 
-local function handle_choice_completion(option, before_cur, path_pos)
+local function handle_choice_completion(option, before_cur)
     local info = mp.get_property_native('option-info/' .. option, {})
 
     if info.type == 'Flag' then
@@ -1299,7 +1293,7 @@ local function handle_choice_completion(option, before_cur, path_pos)
     end
 
     if info['expects-file'] then
-        return handle_file_completion(before_cur, path_pos)
+        return handle_file_completion(before_cur)
     end
 
     -- Fix completing the empty value for --dscale and --cscale.
@@ -1308,6 +1302,79 @@ local function handle_choice_completion(option, before_cur, path_pos)
     end
 
     return info.choices, before_cur
+end
+
+local function command_flags_at_1st_argument_list(command)
+    local flags = {
+        ['playlist-next'] = {'weak', 'force'},
+        ['playlist-play-index'] = {'current'},
+        ['playlist-remove'] = {'current'},
+        ['rescan-external-files'] = {'reselect', 'keep-selection'},
+        ['revert-seek'] = {'mark', 'mark-permanent'},
+        ['screenshot'] = {'subtitles', 'video', 'window', 'each-frame'},
+        ['stop'] = {'keep-playlist'},
+    }
+    flags['playlist-prev'] = flags['playlist-next']
+    flags['screenshot-raw'] = flags.screenshot
+
+    return flags[command]
+end
+
+local function command_flags_at_2nd_argument_list(command)
+    local flags = {
+        ['apply-profile'] = {'default', 'restore'},
+        ['loadfile'] = {'replace', 'append', 'append-play', 'insert-next',
+                        'insert-next-play', 'insert-at', 'insert-at-play'},
+        ['screenshot-to-file'] = {'subtitles', 'video', 'window', 'each-frame'},
+        ['seek'] = {'relative', 'absolute', 'absolute-percent',
+                    'relative-percent', 'keyframes', 'exact'},
+        ['sub-add'] = {'select', 'auto', 'cached'},
+        ['sub-seek'] = {'primary', 'secondary'},
+    }
+    flags.loadlist = flags.loadfile
+    flags['audio-add'] = flags['sub-add']
+    flags['video-add'] = flags['sub-add']
+    flags['sub-step'] = flags['sub-seek']
+
+    return flags[command]
+end
+
+local function list_executables()
+    local executable_map = {}
+    local path = os.getenv('PATH') or ''
+    local separator = platform == 'windows' and ';' or ':'
+    local exts = {}
+
+    for ext in (os.getenv('PATHEXT') or ''):gmatch('[^;]+') do
+        exts[ext:lower()] = true
+    end
+
+    for directory in path:gmatch('[^' .. separator .. ']+') do
+        for _, executable in pairs(utils.readdir(directory, 'files') or {}) do
+            if not next(exts) or exts[(executable:match('%.%w+$') or ''):lower()] then
+                executable_map[executable] = true
+            end
+        end
+    end
+
+    local executables = {}
+    for executable, _ in pairs(executable_map) do
+        executables[#executables + 1] = executable
+    end
+
+    return executables
+end
+
+local function list_filter_labels(type)
+    local values = {'all'}
+
+    for _, value in pairs(mp.get_property_native(type)) do
+        if value.label then
+            values[#values + 1] = value.label
+        end
+    end
+
+    return values
 end
 
 local function common_prefix_length(s1, s2)
@@ -1344,64 +1411,16 @@ local function strip_common_characters(str, prefix)
     max_overlap_length(prefix, str)))
 end
 
--- Find the longest common case-sensitive prefix of the entries in "list".
-local function find_common_prefix(list)
-    local prefix = list[1]
-
-    for i = 2, #list do
-        prefix = prefix:sub(1, common_prefix_length(prefix, list[i]))
-    end
-
-    return prefix
-end
-
--- Return the entries of "list" beginning with "part" and the longest common
--- prefix of the matches.
-local function complete_match(part, list)
-    local completions = {}
-
-    for _, candidate in pairs(list) do
-        if candidate:sub(1, part:len()) == part then
-            completions[#completions + 1] = candidate
+cycle_through_suggestions = function (backwards)
+    if #suggestion_buffer == 0 then
+        -- Allow Tab completion of commands before typing anything.
+        if line == '' then
+            complete()
         end
+
+        return
     end
 
-    local prefix = find_common_prefix(completions)
-
-    if opts.case_sensitive then
-        return completions, prefix or part
-    end
-
-    completions = {}
-    local lower_case_completions = {}
-    local lower_case_part = part:lower()
-
-    for _, candidate in pairs(list) do
-        if candidate:sub(1, part:len()):lower() == lower_case_part then
-            completions[#completions + 1] = candidate
-            lower_case_completions[#lower_case_completions + 1] = candidate:lower()
-        end
-    end
-
-    local lower_case_prefix = find_common_prefix(lower_case_completions)
-
-    -- Behave like GNU readline with completion-ignore-case On.
-    -- part = 'fooBA', completions = {'foobarbaz', 'fooBARqux'} =>
-    -- prefix = 'fooBARqux', lower_case_prefix = 'foobar', return 'fooBAR'
-    if prefix then
-        return completions, prefix:sub(1, lower_case_prefix:len())
-    end
-
-    -- part = 'fooba', completions = {'fooBARbaz', 'fooBarqux'} =>
-    -- prefix = nil, lower_case_prefix ='foobar', return 'fooBAR'
-    if lower_case_prefix then
-        return completions, completions[1]:sub(1, lower_case_prefix:len())
-    end
-
-    return {}, part
-end
-
-local function cycle_through_suggestions(backwards)
     selected_suggestion_index = selected_suggestion_index + (backwards and -1 or 1)
 
     if selected_suggestion_index > #suggestion_buffer then
@@ -1412,23 +1431,20 @@ local function cycle_through_suggestions(backwards)
 
     local before_cur = line:sub(1, completion_pos - 1) ..
                        suggestion_buffer[selected_suggestion_index] .. completion_append
-    line = before_cur .. strip_common_characters(line:sub(cursor), completion_append)
+    line = before_cur .. strip_common_characters(line:sub(cursor),
+        suggestion_buffer[selected_suggestion_index] .. completion_append)
     cursor = before_cur:len() + 1
     update()
 end
 
--- Complete the option or property at the cursor (TAB)
-local function complete(backwards)
-    if #suggestion_buffer > 0 then
-        cycle_through_suggestions(backwards)
-        return
-    end
-
+-- Show autocompletions.
+complete = function ()
     if input_caller then
         completion_old_line = line
         completion_old_cursor = cursor
         mp.commandv('script-message-to', input_caller, 'input-event',
                     'complete', utils.format_json({line:sub(1, cursor - 1)}))
+        update()
         return
     end
 
@@ -1490,7 +1506,13 @@ local function complete(backwards)
     -- comparisons.
     if before_cur == '' or before_cur:find('[%s;]$') then
         tokens[#tokens + 1] = { text = "", pos = cursor }
+    elseif first_useful_token_index > 1 and
+           command_prefixes[tokens[first_useful_token_index - 1].text] then
+        update()
+        return
     end
+
+    completion_pos = tokens[#tokens].pos
 
     local add_actions = {
         ['add'] = true, ['append'] = true, ['pre'] = true, ['set'] = true
@@ -1498,15 +1520,14 @@ local function complete(backwards)
 
     local first_useful_token = tokens[first_useful_token_index]
 
-    completion_pos = before_cur:match('${[=>]?()[%w_/-]*$')
-    if completion_pos then
+    local property_pos = before_cur:match('${[=>]?()[%w_/-]*$')
+    if property_pos then
+        completion_pos = property_pos
         completions = property_list()
-        completion_append = '} '
+        completion_append = '}'
     elseif #tokens == first_useful_token_index then
         completions = command_list()
         completions[#completions + 1] = 'help'
-        completion_pos = first_useful_token.pos
-        completion_append = completion_append .. ' '
     elseif #tokens == first_useful_token_index + 1 then
         if first_useful_token.text == 'set' or
            first_useful_token.text == 'add' or
@@ -1514,92 +1535,71 @@ local function complete(backwards)
            first_useful_token.text == 'cycle-values' or
            first_useful_token.text == 'multiply' then
             completions = property_list()
-            completion_pos = tokens[first_useful_token_index + 1].pos
-            completion_append = completion_append .. ' '
         elseif first_useful_token.text == 'help' then
             completions = command_list()
-            completion_pos = tokens[first_useful_token_index + 1].pos
         elseif first_useful_token.text == 'apply-profile' then
             completions = profile_list()
-            completion_pos = tokens[first_useful_token_index + 1].pos
         elseif first_useful_token.text == 'change-list' then
             completions = list_option_list()
-            completion_pos = tokens[first_useful_token_index + 1].pos
-            completion_append = completion_append .. ' '
+        elseif first_useful_token.text == 'run' then
+            completions = list_executables()
         elseif first_useful_token.text == 'vf' or
                first_useful_token.text == 'af' then
             completions = list_option_action_list(first_useful_token.text)
-            completion_pos = tokens[first_useful_token_index + 1].pos
-            completion_append = completion_append .. ' '
+        elseif first_useful_token.text == 'vf-command' or
+               first_useful_token.text == 'af-command' then
+            completions = list_filter_labels(first_useful_token.text:sub(1,2))
         elseif has_file_argument(first_useful_token.text) then
-            completions, before_cur =
-                handle_file_completion(before_cur, tokens[first_useful_token_index + 1].pos)
+            completions, before_cur = handle_file_completion(before_cur)
+        else
+            completions = command_flags_at_1st_argument_list(first_useful_token.text)
         end
     elseif first_useful_token.text == 'cycle-values' then
-        completion_pos = tokens[#tokens].pos
-        completion_append = completion_append .. ' '
         completions, before_cur =
             handle_choice_completion(tokens[first_useful_token_index + 1].text,
-                                     before_cur, tokens[#tokens].pos)
+                                     before_cur)
     elseif #tokens == first_useful_token_index + 2 then
         if first_useful_token.text == 'set' then
-            completion_pos = tokens[#tokens].pos
             completions, before_cur =
                 handle_choice_completion(tokens[first_useful_token_index + 1].text,
-                                         before_cur,
-                                         tokens[first_useful_token_index + 2].pos)
+                                         before_cur)
         elseif first_useful_token.text == 'change-list' then
             completions = list_option_action_list(tokens[first_useful_token_index + 1].text)
-            completion_pos = tokens[first_useful_token_index + 2].pos
-            completion_append = completion_append .. ' '
         elseif first_useful_token.text == 'vf' or
                first_useful_token.text == 'af' then
             if add_actions[tokens[first_useful_token_index + 1].text] then
-                completion_pos = tokens[#tokens].pos
                 completions, before_cur =
-                    handle_choice_completion(first_useful_token.text,
-                                             before_cur, tokens[#tokens].pos)
+                    handle_choice_completion(first_useful_token.text, before_cur)
             elseif tokens[first_useful_token_index + 1].text == 'remove' then
                 completions = list_option_value_list(first_useful_token.text)
-                completion_pos = tokens[#tokens].pos
             end
+        else
+            completions = command_flags_at_2nd_argument_list(first_useful_token.text)
         end
     elseif #tokens == first_useful_token_index + 3 then
         if first_useful_token.text == 'change-list' then
             if add_actions[tokens[first_useful_token_index + 2].text] then
-                completion_pos = tokens[#tokens].pos
                 completions, before_cur =
                     handle_choice_completion(tokens[first_useful_token_index + 1].text,
-                                             before_cur, tokens[#tokens].pos)
+                                             before_cur)
             elseif tokens[first_useful_token_index + 2].text == 'remove' then
-                completion_pos = tokens[#tokens].pos
                 completions = list_option_value_list(tokens[first_useful_token_index + 1].text)
             end
         elseif first_useful_token.text == 'dump-cache' then
-            completions, before_cur =
-                handle_file_completion(before_cur,
-                                       tokens[first_useful_token_index + 3].pos)
+            completions, before_cur = handle_file_completion(before_cur)
         end
     end
 
-    if completions == nil then
-        return
+    suggestion_buffer = {}
+    selected_suggestion_index = 0
+    completions = completions or {}
+    completion_pos = completion_pos or 1
+    for i, match in ipairs(fuzzy_find(before_cur:sub(completion_pos),
+                                      completions, opts.case_sensitive)) do
+        suggestion_buffer[i] = completions[match]
     end
 
-    local prefix
-    completions, prefix =
-        complete_match(before_cur:sub(completion_pos), completions)
-
-    if #completions == 1 then
-        prefix = prefix .. completion_append
-        after_cur = strip_common_characters(after_cur, completion_append)
-    else
-        table.sort(completions)
-        suggestion_buffer = completions
-        selected_suggestion_index = 0
-    end
-
-    before_cur = before_cur:sub(1, completion_pos - 1) .. prefix
+    -- Expand ~/ with file completion.
     cursor = before_cur:len() + 1
     line = before_cur .. after_cur
     update()
@@ -1641,9 +1641,9 @@ local function get_bindings()
         { 'alt+b',       prev_word                              },
         { 'ctrl+right',  next_word                              },
         { 'alt+f',       next_word                              },
-        { 'tab',         complete                               },
-        { 'ctrl+i',      complete                               },
-        { 'shift+tab',   function() complete(true) end          },
+        { 'tab',         cycle_through_suggestions              },
+        { 'ctrl+i',      cycle_through_suggestions              },
+        { 'shift+tab',   function() cycle_through_suggestions(true) end },
         { 'ctrl+a',      go_home                                },
         { 'home',        go_home                                },
         { 'ctrl+e',      go_end                                 },
@@ -1806,8 +1806,12 @@ mp.register_script_message('get-input', function (script_name, args)
     history = histories[id]
     history_pos = #history + 1
 
-    selectable_items = args.items
-    if selectable_items then
+    if args.items then
+        selectable_items = {}
+        for i, item in ipairs(args.items) do
+            selectable_items[i] = item:gsub("[\r\n].*", "⋯"):sub(1, 300)
+        end
+
         matches = {}
         selected_match = args.default_item or 1
         default_item = args.default_item
@@ -1873,18 +1877,14 @@ mp.register_script_message('complete', function(list, start_pos)
         return
     end
 
-    local completions, prefix = complete_match(line:sub(start_pos, cursor),
-                                               utils.parse_json(list))
-    local before_cur = line:sub(1, start_pos - 1) .. prefix
-    local after_cur = line:sub(cursor)
-    cursor = before_cur:len() + 1
-    line = before_cur .. after_cur
-
-    if #completions > 1 then
-        suggestion_buffer = completions
-        selected_suggestion_index = 0
-        completion_pos = start_pos
-        completion_append = ''
+    suggestion_buffer = {}
+    selected_suggestion_index = 0
+    local completions = utils.parse_json(list)
+    completion_pos = start_pos
+    completion_append = ''
+    for i, match in ipairs(fuzzy_find(line:sub(completion_pos, cursor),
+                                      completions)) do
+        suggestion_buffer[i] = completions[match]
     end
 
     update()
@@ -1932,5 +1932,7 @@ mp.register_event('log-message', function(e)
     log_add('[' .. e.prefix .. '] ' .. e.text:sub(1, -2), styles[e.level],
             terminal_styles[e.level])
 end)
+
+require 'mp.options'.read_options(opts, nil, update)
 
 collectgarbage()

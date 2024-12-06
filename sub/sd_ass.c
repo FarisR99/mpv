@@ -67,6 +67,29 @@ struct seen_packet {
     double pts;
 };
 
+#undef OPT_BASE_STRUCT
+#define OPT_BASE_STRUCT struct mp_sub_filter_opts
+
+const struct m_sub_options mp_sub_filter_opts = {
+    .opts = (const struct m_option[]){
+        {"sdh", OPT_BOOL(sub_filter_SDH)},
+        {"sdh-harder", OPT_BOOL(sub_filter_SDH_harder)},
+        {"sdh-enclosures", OPT_STRING(sub_filter_SDH_enclosures)},
+        {"regex-enable", OPT_BOOL(rf_enable)},
+        {"regex-plain", OPT_BOOL(rf_plain)},
+        {"regex", OPT_STRINGLIST(rf_items)},
+        {"jsre", OPT_STRINGLIST(jsre_items)},
+        {"regex-warn", OPT_BOOL(rf_warn)},
+        {0}
+    },
+    .size = sizeof(OPT_BASE_STRUCT),
+    .defaults = &(OPT_BASE_STRUCT){
+        .sub_filter_SDH_enclosures = "([\uFF08",
+        .rf_enable = true,
+    },
+    .change_flags = UPDATE_SUB_FILT,
+};
+
 static void mangle_colors(struct sd *sd, struct sub_bitmaps *parts);
 static void fill_plaintext(struct sd *sd, double pts);
 
@@ -110,6 +133,7 @@ static void mp_ass_add_default_styles(ASS_Track *track, struct mp_subtitle_opts 
 static const char *const font_mimetypes[] = {
     "application/x-truetype-font",
     "application/vnd.ms-opentype",
+    "application/x-font-otf",
     "application/x-font-ttf",
     "application/x-font", // probably incorrect
     "application/font-sfnt",
@@ -513,8 +537,8 @@ static void configure_ass(struct sd *sd, struct mp_osd_res *dim,
     }
     if (converted || shared_opts->ass_style_override[sd->order]) {
         set_sub_pos = 100.0f - shared_opts->sub_pos[sd->order];
-        set_line_spacing = opts->ass_line_spacing;
-        set_hinting = opts->ass_hinting;
+        set_line_spacing = opts->sub_line_spacing;
+        set_hinting = opts->sub_hinting;
     }
     if (total_override || shared_opts->ass_style_override[sd->order] == ASS_STYLE_OVERRIDE_SCALE) {
         set_font_scale = opts->sub_scale;
@@ -529,7 +553,7 @@ static void configure_ass(struct sd *sd, struct mp_osd_res *dim,
     }
     ass_set_use_margins(priv, set_use_margins);
     ass_set_line_position(priv, set_sub_pos);
-    ass_set_shaper(priv, opts->ass_shaper);
+    ass_set_shaper(priv, opts->sub_shaper);
     int set_force_flags = 0;
     if (total_override) {
         set_force_flags |= ASS_OVERRIDE_BIT_FONT_NAME

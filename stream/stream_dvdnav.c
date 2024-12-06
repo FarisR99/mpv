@@ -72,6 +72,27 @@ struct priv {
     struct dvd_opts *opts;
 };
 
+struct dvd_opts {
+    int angle;
+    int speed;
+    char *device;
+};
+
+#define OPT_BASE_STRUCT struct dvd_opts
+
+const struct m_sub_options dvd_conf = {
+    .opts = (const struct m_option[]){
+        {"device", OPT_STRING(device), .flags = M_OPT_FILE},
+        {"speed", OPT_INT(speed)},
+        {"angle", OPT_INT(angle), M_RANGE(1, 99)},
+        {0}
+    },
+    .size = sizeof(struct dvd_opts),
+    .defaults = &(const struct dvd_opts){
+        .angle = 1,
+    },
+};
+
 #define DNE(e) [e] = # e
 static const char *const mp_dvdnav_events[] = {
     DNE(DVDNAV_BLOCK_OK),
@@ -638,7 +659,13 @@ static int open_s(stream_t *stream)
 
     priv->track = TITLE_LONGEST;
 
-    if (bstr_equals0(title, "longest") || bstr_equals0(title, "first")) {
+    struct MPOpts *opts = mp_get_config_group(stream, stream->global, &mp_opt_root);
+    int edition_id = opts->edition_id;
+    talloc_free(opts);
+
+    if (edition_id >= 0) {
+        priv->track = edition_id;
+    } else if (bstr_equals0(title, "longest") || bstr_equals0(title, "first")) {
         priv->track = TITLE_LONGEST;
     } else if (bstr_equals0(title, "menu")) {
         priv->track = TITLE_MENU;

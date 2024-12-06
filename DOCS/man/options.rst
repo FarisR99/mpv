@@ -1652,16 +1652,36 @@ Video
     ``--keepaspect=no`` is used.
 
 ``--video-align-x=<-1-1>``, ``--video-align-y=<-1-1>``
-    Moves the video rectangle within the black borders, which are usually added
-    to pad the video to screen if video and screen aspect ratios are different.
-    ``--video-align-y=-1`` would move the video to the top of the screen
-    (leaving a border only on the bottom), a value of ``0`` centers it
-    (default), and a value of ``1`` would put the video at the bottom of the
-    screen.
+    When the video is bigger than the window, these move the displayed rectangle
+    to show different parts of the video. ``--video-align-y=-1`` would display
+    the top of the video, ``0`` would display the center (default), and ``1``
+    would display the bottom.
+
+    When the video is smaller than the window and ``--video-recenter`` is
+    disabled, these move the video rectangle within the black borders, which are
+    usually added to pad the video to the window if video and window aspect
+    ratios are different. ``--video-align-y=-1`` would move the video to the top
+    of the window (leaving a border only on the bottom), ``0`` would center it,
+    and ``1`` would put the video at the bottom of the window.
 
     If video and screen aspect match perfectly, these options do nothing.
 
+    Unlike ``--video-pan-x`` and ``--video-pan-y``, these don't go beyond the
+    video's or window's boundaries or make the displayed rectangle drift off
+    after zooming.
+
     This option is disabled if ``--keepaspect=no`` is used.
+
+``--video-recenter=<yes|no>``
+    Whether to behave as if ``--video-align-x`` and ``--video-align-y`` were 0
+    when the video becomes smaller than the window in the respective direction
+
+    After zooming in until the video is bigger the window, panning with
+    `--video-align-x` and/or `--video-align-y`, and zooming out until the video
+    is smaller than the window, this is useful to recenter the video in the
+    window.
+
+    Default: no.
 
 ``--video-margin-ratio-left=<val>``, ``--video-margin-ratio-right=<val>``, ``--video-margin-ratio-top=<val>``, ``--video-margin-ratio-bottom=<val>``
     Set extra video margins on each border (default: 0). Each value is a ratio
@@ -2506,7 +2526,7 @@ Subtitles
 
         Using this option may lead to incorrect subtitle rendering.
 
-``--sub-ass-hinting=<none|light|normal|native>``
+``--sub-hinting=<none|light|normal|native>``
     Set font hinting type. <type> can be:
 
     :none:       no hinting (default)
@@ -2521,10 +2541,10 @@ Subtitles
         of animations with some badly authored ASS scripts. It is recommended
         to not use this option, unless really needed.
 
-``--sub-ass-line-spacing=<value>``
+``--sub-line-spacing=<value>``
     Set line spacing value for SSA/ASS renderer.
 
-``--sub-ass-shaper=<simple|complex>``
+``--sub-shaper=<simple|complex>``
     Set the text layout engine used by libass.
 
     :simple:   uses Fribidi only, fast, doesn't render some languages correctly
@@ -2897,7 +2917,7 @@ Subtitles
     height: if the window height is larger or smaller than 720, the actual size
     of the text increases or decreases as well.
 
-    Default: 55.
+    Default: 38
 
 ``--sub-blur=<0..20.0>``
     Gaussian blur factor applied to the sub font border.
@@ -2925,7 +2945,7 @@ Subtitles
 
     ``--sub-border-size`` is an alias for ``--sub-outline-size``.
 
-    Default: 3.
+    Default: 1.65
 
 ``--sub-border-style=<outline-and-shadow|opaque-box|background-box>``
     The style of the border.
@@ -2950,6 +2970,16 @@ Subtitles
       This corresponds to ``BorderStyle=4``, which is a libass-specific extension.
 
     Default: ``outline-and-shadow``.
+
+    Predefined profiles are available to enable optimized ``background-box`` style
+    for OSD and subtitles.
+
+    .. admonition:: Profiles
+
+        - ``--profile=sub-box`` applies the ``background-box`` style to subtitles
+        - ``--profile=osd-box`` applies the ``background-box`` style to the OSD,
+          including stats and console
+        - ``--profile=box`` applies the ``background-box`` style to both subtitles and OSD
 
 ``--sub-color=<color>``
     Specify the color used for unstyled text subtitles.
@@ -2986,7 +3016,7 @@ Subtitles
     This option specifies the distance of the sub to the left, as well as at
     which distance from the right border long sub text will be broken.
 
-    Default: 25.
+    Default: 19
 
 ``--sub-margin-y=<size>``
     Top and bottom screen margin for the subs in scaled pixels (see
@@ -2995,7 +3025,7 @@ Subtitles
     This option specifies the vertical margins of unstyled text subtitles.
     If you just want to raise the vertical subtitle position, use ``--sub-pos``.
 
-    Default: 22.
+    Default: 34
 
 ``--sub-align-x=<left|center|right>``
     Control to which corner of the screen text subtitles should be
@@ -4456,7 +4486,7 @@ OSD
 ``--osd-font-size=<size>``
     Specify the OSD font size. See ``--sub-font-size`` for details.
 
-    Default: 55.
+    Default: 30
 
 ``--osd-msg1=<string>``
     Show this string as message on OSD with OSD level 1 (visible by default).
@@ -4573,13 +4603,21 @@ OSD
 
     ``--osd-border-size`` is an alias for ``--osd-outline-size``.
 
-    Default: 3.
+    Default: 1.65
 
 ``--osd-border-style=<outline-and-shadow|opaque-box|background-box>``
     See ``--sub-border-style``. Style used for OSD text border.
 
 ``--osd-color=<color>``
     Specify the color used for OSD.
+    See ``--sub-color`` for details.
+
+``--osd-selected-color=<color>``
+    The color of the selected item in lists.
+    See ``--sub-color`` for details.
+
+``--osd-selected-outline-color=<color>``
+    The outline color of the selected item in lists.
     See ``--sub-color`` for details.
 
 ``--osd-fractions``
@@ -4601,7 +4639,7 @@ OSD
     This option specifies the distance of the OSD to the left, as well as at
     which distance from the right border long OSD text will be broken.
 
-    Default: 25.
+    Default: 16
 
 ``--osd-margin-y=<size>``
     Top and bottom screen margin for the OSD in scaled pixels (see
@@ -4609,7 +4647,7 @@ OSD
 
     This option specifies the vertical margins of the OSD.
 
-    Default: 22.
+    Default: 16
 
 ``--osd-align-x=<left|center|right>``
     Control to which corner of the screen OSD should be
@@ -6704,7 +6742,8 @@ them.
     Android with ``--gpu-context=android`` only.
 
 ``--gpu-sw``
-    Continue even if a software renderer is detected.
+    Continue even if a software renderer is detected. This only works with
+    OpenGL/Vulkan backends. For d3d11, see ``--d3d11-warp``.
 
 ``--gpu-context=<context1,context2,...[,]>``
     Specify a priority list of the GPU contexts to be used.
@@ -6793,15 +6832,13 @@ them.
     other ways (like with the ``--gamma`` option or key bindings and the
     ``gamma`` property), the value is multiplied with the other gamma value.
 
-    This option is deprecated and may be removed in the future.
-
 ``--gamma-auto``
     Automatically corrects the gamma value depending on ambient lighting
     conditions (adding a gamma boost for bright rooms).
 
     This option is deprecated and may be removed in the future.
 
-    NOTE: Only implemented on macOS.
+    NOTE: Only implemented on macOS and ``--vo=gpu``.
 
 ``--image-lut=<file>``
     Specifies a custom LUT file (in Adobe .cube format) to apply to the colors
@@ -6826,11 +6863,12 @@ them.
         Fully replaces the color decoding. A LUT of this type should ingest the
         image's native colorspace and output normalized non-linear RGB.
 
-``--target-colorspace-hint``
+``--target-colorspace-hint=<auto|yes|no>``
     Automatically configure the output colorspace of the display to pass
     through the input values of the stream (e.g. for HDR passthrough), if
-    possible. Requires a supporting driver and ``--vo=gpu-next``.
-    (Default: ``yes``)
+    possible. In ``auto`` mode (the default), the target colorspace is only set,
+    if the display signals support for HDR colorspace.
+    Requires a supporting driver and ``--vo=gpu-next``. (Default: ``auto``)
 
 ``--target-prim=<value>``
     Specifies the primaries of the display. Video colors will be adapted to
@@ -6928,7 +6966,8 @@ them.
 
     In ``auto`` mode (the default), the chosen peak is an appropriate value
     based on the TRC in use. For SDR curves, it uses 203. For HDR curves, it
-    uses 203 * the transfer function's nominal peak.
+    uses 203 * the transfer function's nominal peak. If available, it will use
+    the target display's peak brightness as reported by the display.
 
     .. note::
 
@@ -6953,6 +6992,7 @@ them.
     black point. Used in black point compensation during HDR tone-mapping.
     ``auto`` is the default and assumes 1000:1 contrast as a typical SDR display
     would have or an infinite contrast when HDR ``--target-trc`` is used.
+    If supported by the API, display contrast will be used as reported.
     ``inf`` contrast specifies display with perfect black level, in practice OLED.
     (Only for ``--vo=gpu-next``)
 
@@ -7381,19 +7421,9 @@ them.
 
     https://libplacebo.org/options/
 
-Miscellaneous
--------------
 
-``--display-tags=tag1,tags2,...``
-    Set the list of tags that should be displayed on the terminal and stats.
-    Tags that are in the list, but are not present in the played file, will not
-    be shown. If a value ends with ``*``, all tags are matched by prefix (though
-    there is no general globbing). Just passing ``*`` essentially filtering.
-
-    The default includes a common list of tags, call mpv with ``--list-options``
-    to see it.
-
-    This is a string list option. See `List Options`_ for details.
+Video Sync
+----------
 
 ``--mc=<seconds/frame>``
     Maximum A-V sync correction per frame (in seconds)
@@ -7546,6 +7576,20 @@ Miscellaneous
     the A/V desync cannot be compensated, too high values could lead to chaotic
     frame dropping due to the audio "overshooting" and skipping multiple video
     frames before the sync logic can react.
+
+Miscellaneous
+-------------
+
+``--display-tags=tag1,tags2,...``
+    Set the list of tags that should be displayed on the terminal and stats.
+    Tags that are in the list, but are not present in the played file, will not
+    be shown. If a value ends with ``*``, all tags are matched by prefix (though
+    there is no general globbing). Just passing ``*`` essentially filtering.
+
+    The default includes a common list of tags, call mpv with ``--list-options``
+    to see it.
+
+    This is a string list option. See `List Options`_ for details.
 
 ``--mf-fps=<value>``
     Framerate used when decoding from multiple PNG or JPEG files with ``mf://``
@@ -7789,3 +7833,18 @@ Miscellaneous
     code is the same.)
 
     Conversion is not applied to metadata that is updated at runtime.
+
+``--clipboard-enable=<yes|no>``
+    (Windows and Wayland only)
+
+    Enable native clipboard support (default: yes). This allows reading and
+    writing to the ``clipboard`` property to get and set clipboard contents.
+
+``--clipboard-monitor=<yes|no>``
+    (Windows only)
+
+    Enable clipboard monitoring so that the ``clipboard`` property can be
+    observed for content changes (default: no). This only affects clipboard
+    implementations which use polling to monitor clipboard updates.
+    Other platforms currently ignore this option and always/never notify
+    changes.

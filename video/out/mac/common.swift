@@ -139,8 +139,6 @@ class Common: NSObject {
             DispatchQueue.main.async {
                 self.window?.toggleFullScreen(nil)
             }
-        } else {
-            window?.isMovableByWindowBackground = true
         }
     }
 
@@ -281,13 +279,16 @@ class Common: NSObject {
     }
 
     func initLightSensor() {
-        let srv = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleLMUController"))
+        let mainPort: mach_port_t
+        if #available(macOS 12.0, *) { mainPort = kIOMainPortDefault } else { mainPort = kIOMasterPortDefault }
+
+        let srv = IOServiceGetMatchingService(mainPort, IOServiceMatching("AppleLMUController"))
         if srv == IO_OBJECT_NULL {
             log.verbose("Can't find an ambient light sensor")
             return
         }
 
-        lightSensorIOPort = IONotificationPortCreate(kIOMainPortDefault)
+        lightSensorIOPort = IONotificationPortCreate(mainPort)
         IONotificationPortSetDispatchQueue(lightSensorIOPort, queue)
         var n = io_object_t()
         IOServiceAddInterestNotification(lightSensorIOPort, srv, kIOGeneralInterest, lightSensorCallback,
@@ -643,6 +644,9 @@ class Common: NSObject {
             DispatchQueue.main.async {
                 self.title = title
             }
+            return VO_TRUE
+        case VOCTRL_BEGIN_DRAGGING:
+            self.window?.startDragging()
             return VO_TRUE
         default:
             return VO_NOTIMPL

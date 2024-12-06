@@ -173,6 +173,10 @@ sources = files(
     'player/sub.c',
     'player/video.c',
 
+    ## clipboard
+    'player/clipboard/clipboard.c',
+    'player/clipboard/clipboard-vo.c',
+
     ## Streams
     'stream/cookies.c',
     'stream/stream.c',
@@ -257,7 +261,7 @@ sources = files(
     ## tree_allocator
     'ta/ta.c',
     'ta/ta_talloc.c',
-    'ta/ta_utils.c'
+    'ta/ta_utils.c',
 )
 
 
@@ -317,6 +321,9 @@ mswin_flags = ['-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00', '-DUNICODE',
                '-D_USE_MATH_DEFINES', '-DWIN32_LEAN_AND_MEAN',
                '-D_CRT_DECLARE_NONSTDC_NAMES', '-D_CRT_NONSTDC_NO_WARNINGS',
                '-D_CRT_SECURE_NO_WARNINGS', '-DWINRT_NO_SOURCE_LOCATION']
+
+# https://developercommunity.visualstudio.com/t/NAN-is-no-longer-compile-time-constant-i/10688907
+mswin_flags += '-D_UCRT_NOISY_NAN'
 
 if host_machine.system() == 'windows'
     flags += [mswin_flags]
@@ -522,6 +529,7 @@ if features['win32-desktop']
         sources += files('osdep/subprocess-dummy.c')
     endif
     sources += files('input/ipc-win.c',
+                     'player/clipboard/clipboard-win.c',
                      'osdep/language-win.c',
                      'osdep/terminal-win.c',
                      'video/out/w32_common.c',
