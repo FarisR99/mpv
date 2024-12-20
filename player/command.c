@@ -196,8 +196,9 @@ bool mp_hook_test_completion(struct MPContext *mpctx, char *type)
         if (h->active && strcmp(h->type, type) == 0) {
             if (!mp_client_id_exists(mpctx, h->client_id)) {
                 MP_WARN(mpctx, "client removed during hook handling\n");
+                // Trigger completion of this hook and continue with the next one.
+                mp_hook_continue(mpctx, h->client_id, h->seq);
                 hook_remove(mpctx, h);
-                break;
             }
             return false;
         }
@@ -229,14 +230,21 @@ static int invoke_hook_handler(struct MPContext *mpctx, struct hook_handler *h)
     return r;
 }
 
-static int run_next_hook_handler(struct MPContext *mpctx, char *type, int index)
+static int run_next_hook_handler(struct MPContext *mpctx, char *type, int start)
 {
     struct command_ctx *cmd = mpctx->command_ctx;
 
-    for (int n = index; n < cmd->num_hooks; n++) {
+    for (int n = start; n < cmd->num_hooks; n++) {
         struct hook_handler *h = cmd->hooks[n];
-        if (strcmp(h->type, type) == 0)
-            return invoke_hook_handler(mpctx, h);
+        if (strcmp(h->type, type) == 0) {
+            int ret = invoke_hook_handler(mpctx, h);
+            // Repeat until the hook is successfully started or none are left.
+            if (ret < 0) {
+                --n;
+                continue;
+            }
+            return ret;
+        }
     }
 
     mp_wakeup_core(mpctx); // finished hook
@@ -247,10 +255,7 @@ static int run_next_hook_handler(struct MPContext *mpctx, char *type, int index)
 // caller needs to use mp_hook_test_completion() to check whether they're done.
 void mp_hook_start(struct MPContext *mpctx, char *type)
 {
-    while (run_next_hook_handler(mpctx, type, 0) < 0) {
-        // We can repeat this until all broken clients have been removed, and
-        // hook processing is successfully started.
-    }
+    run_next_hook_handler(mpctx, type, 0);
 }
 
 int mp_hook_continue(struct MPContext *mpctx, int64_t client_id, uint64_t id)
@@ -4086,9 +4091,10 @@ static int get_clipboard(struct MPContext *mpctx, void *arg,
     struct clipboard_data data;
     void *tmp = talloc_new(NULL);
 
-    if (mp_clipboard_get_data(mpctx->clipboard, params, &data, tmp) != CLIPBOARD_SUCCESS) {
+    int ret = mp_clipboard_get_data(mpctx->clipboard, params, &data, tmp);
+    if (ret != CLIPBOARD_SUCCESS) {
         talloc_free(tmp);
-        return M_PROPERTY_ERROR;
+        return ret == CLIPBOARD_UNAVAILABLE ? M_PROPERTY_UNAVAILABLE : M_PROPERTY_ERROR;
     }
 
     switch (data.type) {
@@ -4116,9 +4122,10 @@ static int set_clipboard(struct MPContext *mpctx, void *arg,
         return M_PROPERTY_NOT_IMPLEMENTED;
     }
 
-    if (mp_clipboard_set_data(mpctx->clipboard, params, &data) == CLIPBOARD_SUCCESS)
+    int ret = mp_clipboard_set_data(mpctx->clipboard, params, &data);
+    if (ret == CLIPBOARD_SUCCESS)
         return M_PROPERTY_OK;
-    return M_PROPERTY_ERROR;
+    return ret == CLIPBOARD_UNAVAILABLE ? M_PROPERTY_UNAVAILABLE : M_PROPERTY_ERROR;
 }
 
 static int mp_property_clipboard(void *ctx, struct m_property *prop,
