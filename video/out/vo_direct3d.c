@@ -473,7 +473,7 @@ static bool init_d3d(d3d_priv *priv)
         return false;
     }
 
-    /* Store relevant information reguarding caps of device */
+    /* Store relevant information regarding caps of device */
     texture_caps                  = disp_caps.TextureCaps;
     dev_caps                      = disp_caps.DevCaps;
     priv->device_caps_power2_only =  (texture_caps & D3DPTEXTURECAPS_POW2) &&
@@ -1003,18 +1003,18 @@ static bool get_video_buffer(d3d_priv *priv, struct mp_image *out)
     return true;
 }
 
-static void draw_frame(struct vo *vo, struct vo_frame *frame)
+static bool draw_frame(struct vo *vo, struct vo_frame *frame)
 {
     d3d_priv *priv = vo->priv;
     if (!priv->d3d_device)
-        return;
+        goto done;
 
     struct mp_image buffer;
     if (!get_video_buffer(priv, &buffer))
-        return;
+        goto done;
 
     if (!frame->current)
-        return;
+        goto done;
 
     mp_image_copy(&buffer, frame->current);
 
@@ -1024,6 +1024,9 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
     priv->osd_pts = frame->current->pts;
 
     d3d_draw_frame(priv);
+
+done:
+    return VO_TRUE;
 }
 
 static mp_image_t *get_window_screenshot(d3d_priv *priv)

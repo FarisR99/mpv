@@ -47,21 +47,9 @@ extension NSScreen {
     }
 }
 
-extension NSColor {
-    convenience init(hex: String) {
-        let int = Int(hex.dropFirst(), radix: 16) ?? 0
-        let alpha = CGFloat((int >> 24) & 0x000000FF)/255
-        let red   = CGFloat((int >> 16) & 0x000000FF)/255
-        let green = CGFloat((int >> 8)  & 0x000000FF)/255
-        let blue  = CGFloat((int)       & 0x000000FF)/255
-
-        self.init(calibratedRed: red, green: green, blue: blue, alpha: alpha)
-    }
-}
-
 extension NSEvent.ModifierFlags {
-    public static var optionLeft: NSEvent.ModifierFlags = .init(rawValue: UInt(NX_DEVICELALTKEYMASK))
-    public static var optionRight: NSEvent.ModifierFlags = .init(rawValue: UInt(NX_DEVICERALTKEYMASK))
+    public static let optionLeft: NSEvent.ModifierFlags = .init(rawValue: UInt(NX_DEVICELALTKEYMASK))
+    public static let optionRight: NSEvent.ModifierFlags = .init(rawValue: UInt(NX_DEVICERALTKEYMASK))
 }
 
 extension mp_keymap {

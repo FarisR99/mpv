@@ -2778,6 +2778,18 @@ static void update_hidpi_window_scale(struct MPContext *mpctx, bool hidpi_scale)
     vo_control(vo, VOCTRL_SET_UNFS_WINDOW_SIZE, s);
 }
 
+static int mp_property_ambient_light(void *ctx, struct m_property *prop,
+                                     int action, void *arg)
+{
+    MPContext *mpctx = ctx;
+    struct vo *vo = mpctx->video_out;
+    double lux;
+    if (!vo || vo_control(vo, VOCTRL_GET_AMBIENT_LUX, &lux) < 1)
+        return M_PROPERTY_UNAVAILABLE;
+
+    return m_property_double_ro(action, arg, lux);
+}
+
 static int mp_property_focused(void *ctx, struct m_property *prop,
                                      int action, void *arg)
 {
@@ -4373,6 +4385,7 @@ static const struct m_property mp_properties_base[] = {
     {"estimated-display-fps", mp_property_estimated_display_fps},
     {"vsync-jitter", mp_property_vsync_jitter},
     {"display-hidpi-scale", mp_property_hidpi_scale},
+    {"ambient-light", mp_property_ambient_light},
 
     {"working-directory", mp_property_cwd},
 
@@ -4460,6 +4473,7 @@ static const char *const *const mp_event_property_change[] = {
       "display-height"),
     E(MP_EVENT_WIN_STATE2, "display-hidpi-scale"),
     E(MP_EVENT_FOCUS, "focused"),
+    E(MP_EVENT_AMBIENT_LIGHTING_CHANGED, "ambient-light"),
     E(MP_EVENT_CHANGE_PLAYLIST, "playlist", "playlist-pos", "playlist-pos-1",
       "playlist-count", "playlist/count", "playlist-current-pos",
       "playlist-playing-pos"),
@@ -4541,18 +4555,18 @@ int mp_property_do(const char *name, int action, void *val,
     int r = m_property_do(ctx->log, cmd->properties, name, action, val, ctx);
 
     if (mp_msg_test(ctx->log, MSGL_V) && is_property_set(action, val)) {
-        struct m_option ot = {0};
+        struct m_option option_type = {0};
         void *data = val;
         switch (action) {
         case M_PROPERTY_SET_NODE:
-            ot.type = &m_option_type_node;
+            option_type.type = &m_option_type_node;
             break;
         case M_PROPERTY_SET_STRING:
-            ot.type = &m_option_type_string;
+            option_type.type = &m_option_type_string;
             data = &val;
             break;
         }
-        char *t = ot.type ? m_option_print(&ot, data) : NULL;
+        char *t = option_type.type ? m_option_print(&option_type, data) : NULL;
         MP_VERBOSE(ctx, "Set property: %s%s%s -> %d\n",
                    name, t ? "=" : "", t ? t : "", r);
         talloc_free(t);
@@ -7162,6 +7176,12 @@ const struct mp_cmd_def mp_cmds[] = {
                 {"window", 1},
                 {"subtitles", 2}),
                 OPTDEF_INT(2)},
+             {"format", OPT_CHOICE(v.i,
+                {"bgr0", 0},
+                {"bgra", 1},
+                {"rgba", 2},
+                {"rgba64", 3}),
+                OPTDEF_INT(0)},
         },
     },
     { "loadfile", cmd_loadfile,

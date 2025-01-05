@@ -435,7 +435,7 @@ const struct m_sub_options gl_video_conf = {
             {"auto", 0}, {"yes", 1}, {"no", -1})},
         {"gamma-factor", OPT_FLOAT(gamma), M_RANGE(0.1, 2.0)},
         {"gamma-auto", OPT_BOOL(gamma_auto),
-            .deprecation_message = "no replacement"},
+            .deprecation_message = "replacement: gamma-auto.lua"},
         {"target-prim", OPT_CHOICE_C(target_prim, pl_csp_prim_names)},
         {"target-trc", OPT_CHOICE_C(target_trc, pl_csp_trc_names)},
         {"target-peak", OPT_CHOICE(target_peak, {"auto", 0}),
@@ -1604,7 +1604,7 @@ found:
         bool is_overwrite = strcmp(store_name, name) == 0;
 
         // If user shader is set to align HOOKED with reference and fix its
-        // offset, it requires HOOKED to be resizable and overwrited.
+        // offset, it requires HOOKED to be resizable and overwritten.
         if (is_overwrite && hook->align_offset) {
             if (!trans) {
                 MP_ERR(p, "Hook tried to align unresizable texture %s!\n",
@@ -3586,7 +3586,7 @@ void gl_video_screenshot(struct gl_video *p, struct vo_frame *frame,
     };
 
     params.format = ra_find_unorm_format(p->ra, 1, 4);
-    int mpfmt = IMGFMT_RGB0;
+    int mpfmt = p->has_alpha ? IMGFMT_RGBA : IMGFMT_RGB0;
     if (args->high_bit_depth && p->ra_format.component_bits > 8) {
         const struct ra_format *fmt = ra_find_unorm_format(p->ra, 2, 4);
         if (fmt && fmt->renderable) {
@@ -4271,11 +4271,11 @@ static int validate_error_diffusion_opt(struct mp_log *log, const m_option_t *op
     return r;
 }
 
-void gl_video_set_ambient_lux(struct gl_video *p, int lux)
+void gl_video_set_ambient_lux(struct gl_video *p, double lux)
 {
     if (p->opts.gamma_auto) {
         p->opts.gamma = gl_video_scale_ambient_lux(16.0, 256.0, 1.0, 1.2, lux);
-        MP_TRACE(p, "ambient light changed: %d lux (gamma: %f)\n", lux,
+        MP_TRACE(p, "ambient light changed: %f lux (gamma: %f)\n", lux,
                  p->opts.gamma);
     }
 }

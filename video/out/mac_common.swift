@@ -47,8 +47,7 @@ class MacCommon: Common {
             let previousActiveApp = getActiveApp()
             initApp()
 
-            let (_, wr, _) = getInitProperties(vo)
-
+            let (_, wr, forcePosition) = getInitProperties(vo)
             guard let layer = self.layer else {
                 log.error("Something went wrong, no MetalLayer was initialized")
                 exit(1)
@@ -60,7 +59,9 @@ class MacCommon: Common {
                 initWindowState()
             }
 
-            if option.vo.auto_window_resize {
+            if forcePosition {
+                window?.updateFrame(wr)
+            } else if option.vo.auto_window_resize {
                 window?.updateSize(wr.size)
             }
 
@@ -145,10 +146,6 @@ class MacCommon: Common {
     override func updateDisplaylink() {
         super.updateDisplaylink()
         timer?.updatePolicy(periodSeconds: 1 / currentFps())
-    }
-
-    override func lightSensorUpdate() {
-        flagEvents(VO_EVENT_AMBIENT_LIGHTING_CHANGED)
     }
 
     override func updateICCProfile() {

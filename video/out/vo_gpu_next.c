@@ -886,7 +886,7 @@ static void update_tm_viz(struct pl_color_map_params *params,
     if (!params->visualize_lut)
         return;
 
-    // Use right half of sceen for TM visualization, constrain to 1:1 AR
+    // Use right half of screen for TM visualization, constrain to 1:1 AR
     const float out_w = fabsf(pl_rect_w(target->crop));
     const float out_h = fabsf(pl_rect_h(target->crop));
     const float size = MPMIN(out_w / 2.0f, out_h);
@@ -904,7 +904,7 @@ static void update_tm_viz(struct pl_color_map_params *params,
 static void update_hook_opts_dynamic(struct priv *p, const struct pl_hook *hook,
                                      const struct mp_image *mpi);
 
-static void draw_frame(struct vo *vo, struct vo_frame *frame)
+static bool draw_frame(struct vo *vo, struct vo_frame *frame)
 {
     struct priv *p = vo->priv;
     pl_options pars = p->pars;
@@ -1029,7 +1029,7 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
 #endif
             pl_queue_update(p->queue, NULL, &qparams);
         }
-        return;
+        return VO_FALSE;
     }
 
     bool valid = false;
@@ -1173,6 +1173,7 @@ done:
 
     pl_gpu_flush(gpu);
     p->frame_pending = true;
+    return VO_TRUE;
 }
 
 static void flip_page(struct vo *vo)

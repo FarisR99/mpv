@@ -298,6 +298,7 @@ const struct m_sub_options mp_subtitle_sub_opts = {
         {"sub-gray", OPT_BOOL(sub_gray)},
         {"sub-ass", OPT_BOOL(ass_enabled), .flags = UPDATE_SUB_HARD},
         {"sub-scale", OPT_FLOAT(sub_scale), M_RANGE(0, 100)},
+        {"sub-scale-signs", OPT_BOOL(sub_scale_signs)},
         {"sub-line-spacing", OPT_FLOAT(sub_line_spacing), M_RANGE(-1000, 1000)},
         {"sub-ass-line-spacing", OPT_REPLACED("sub-line-spacing")},
         {"sub-use-margins", OPT_BOOL(sub_use_margins)},
@@ -517,8 +518,7 @@ static const m_option_t mp_opts[] = {
         {"idle",        IDLE_PRIORITY_CLASS}),
         .flags = UPDATE_PRIORITY},
 #endif
-    {"media-controls", OPT_CHOICE(media_controls,
-        {"no", 0}, {"player", 1}, {"yes", 2})},
+    {"media-controls", OPT_BOOL(media_controls)},
     {"config", OPT_BOOL(load_config), .flags = M_OPT_PRE_PARSE},
     {"config-dir", OPT_STRING(force_configdir),
         .flags = M_OPT_NOCFG | M_OPT_PRE_PARSE | M_OPT_FILE},
@@ -704,6 +704,8 @@ static const m_option_t mp_opts[] = {
     {"cover-art-auto-exts", OPT_ALIAS("image-exts")},
     {"cover-art-whitelist", OPT_STRINGLIST(coverart_whitelist)},
     {"video-exts", OPT_STRINGLIST(video_exts)},
+    {"archive-exts", OPT_STRINGLIST(archive_exts)},
+    {"playlist-exts", OPT_STRINGLIST(playlist_exts)},
 
     {"", OPT_SUBSTRUCT(subs_rend, mp_subtitle_sub_opts)},
     {"", OPT_SUBSTRUCT(subs_shared, mp_subtitle_shared_sub_opts)},
@@ -1024,7 +1026,7 @@ static const struct MPOpts mp_default_opts = {
     .osd_bar_visible = true,
     .screenshot_template = "mpv-shot%n",
     .play_dir = 1,
-    .media_controls = 1,
+    .media_controls = true,
     .video_exts = (char *[]){
         "3g2", "3gp", "avi", "flv", "m2ts", "m4v", "mj2", "mkv", "mov", "mp4",
         "mpeg", "mpg", "ogv", "rmvb", "ts", "webm", "wmv", "y4m", NULL
@@ -1036,6 +1038,12 @@ static const struct MPOpts mp_default_opts = {
     .image_exts = (char *[]){
         "avif", "bmp", "gif", "heic", "heif", "j2k", "jp2", "jpeg", "jpg",
         "jxl", "png", "qoi", "svg", "tga", "tif", "tiff", "webp", NULL
+    },
+    .archive_exts = (char *[]){
+        "zip", "rar", "7z", "cbz", "cbr", NULL
+    },
+    .playlist_exts = (char *[]){
+        "m3u", "m3u8", "pls", "edl", NULL
     },
 
     .sub_auto_exts = (char *[]){

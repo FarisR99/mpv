@@ -242,6 +242,11 @@ F8
 F9
     Show the list of audio and subtitle streams.
 
+Ctrl+v
+    Append the file or URL in the clipboard to the playlist. If nothing is
+    currently playing, it is played immediately. Only works on platforms that
+    support the ``clipboard`` property.
+
 i and I
     Show/toggle an overlay displaying statistics about the currently playing
     file such as codec, framerate, number of dropped frames and so on. See
@@ -289,6 +294,8 @@ from a list of items by typing part of the desired item, by clicking the desired
 item, or by navigating them with keybindings: ``Down`` and ``Ctrl+n`` go down,
 ``Up`` and ``Ctrl+p`` go up, ``Page down`` and ``Ctrl+f`` scroll down one page,
 and ``Page up`` and ``Ctrl+b`` scroll up one page.)
+
+In track selectors, selecting the current tracks disables it.
 
 g-p
     Select a playlist entry.
