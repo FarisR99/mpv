@@ -38,7 +38,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/ruff-action@v2
+      - name: Check
+        id: check
+        uses: astral-sh/ruff-action@v3
+        with:
+          src: ". TOOLS/umpv"
+      - name: Suggested changes
+        if: ${{ failure() && steps.check.outcome == 'failure' }}
+        run: ruff check . TOOLS/umpv --diff
+
+  mypy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: python/mypy@master
+        with:
+          install_project_dependencies: no
+          options: '--check-untyped-defs'
+          paths: ". TOOLS/umpv"
 
   editorconfig:
     runs-on: ubuntu-latest
