@@ -392,6 +392,14 @@ jobs:
         run: |
           meson test -C build
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mpv-msys2-${{ matrix.sys }}
+          path: |
+            build/mpv.???
+            build/vulkan-*.dll
+            !build/mpv.lib
+
       - name: Print meson test log
         if: ${{ failure() && steps.tests.outcome == 'failure' }}
         run: |
