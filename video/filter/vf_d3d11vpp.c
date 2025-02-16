@@ -144,6 +144,8 @@ static void enable_nvidia_rtx_extension(struct mp_filter *vf)
 
     if (FAILED(hr)) {
         MP_WARN(vf, "Failed to enable NVIDIA RTX Super Resolution: %s\n", mp_HRESULT_to_str(hr));
+        MP_WARN(vf, "Falling back to basic scaling\n");
+        p->opts->scaling_mode = SCALING_BASIC;
     } else {
         MP_VERBOSE(vf, "NVIDIA RTX Super Resolution enabled\n");
     }
@@ -169,6 +171,7 @@ static void enable_nvidia_true_hdr(struct mp_filter *vf)
 
     if (FAILED(hr)) {
         MP_WARN(vf, "Failed to enable NVIDIA RTX Video HDR: %s\n", mp_HRESULT_to_str(hr));
+        p->opts->nvidia_true_hdr = false;
     } else {
         MP_VERBOSE(vf, "NVIDIA RTX Video HDR enabled\n");
     }
@@ -216,6 +219,8 @@ static void enable_intel_vsr_extension(struct mp_filter *vf)
 
 failed:
     MP_WARN(vf, "Failed to enable Intel Video Super Resolution: %s\n", mp_HRESULT_to_str(hr));
+    MP_WARN(vf, "Falling back to basic scaling\n");
+    p->opts->scaling_mode = SCALING_BASIC;
 }
 
 static int recreate_video_proc(struct mp_filter *vf)
@@ -312,13 +317,16 @@ create:
                                                          p->video_proc,
                                                          &csp);
 
-    switch (p->opts->scaling_mode) {
-    case SCALING_INTEL_VSR:
-        enable_intel_vsr_extension(vf);
-        break;
-    case SCALING_NVIDIA_RTX:
-        enable_nvidia_rtx_extension(vf);
-        break;
+    if (p->opts->scale != 1.0)
+    {
+        switch (p->opts->scaling_mode) {
+        case SCALING_INTEL_VSR:
+            enable_intel_vsr_extension(vf);
+            break;
+        case SCALING_NVIDIA_RTX:
+            enable_nvidia_rtx_extension(vf);
+            break;
+        }
     }
 
     if (p->opts->nvidia_true_hdr)
@@ -665,7 +673,7 @@ const struct mp_user_filter_entry vf_d3d11vpp = {
         .priv_defaults = &(const OPT_BASE_STRUCT) {
             .deint_enabled = false,
             .scale = 1.0,
-            .scaling_mode = SCALING_BASIC,
+            .scaling_mode = SCALING_NVIDIA_RTX,
             .mode = 0,
             .field_parity = MP_FIELD_PARITY_AUTO,
         },
