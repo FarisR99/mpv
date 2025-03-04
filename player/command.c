@@ -118,6 +118,8 @@ struct command_ctx {
     mpv_node udata;
     mpv_node mdata;
 
+    int hwdec_osd_mode;
+
     double cached_window_scale;
 };
 
@@ -1916,7 +1918,7 @@ static int mp_property_audio_out_params(void *ctx, struct m_property *prop,
 static struct track* track_next(struct MPContext *mpctx, enum stream_type type,
                                 int direction, struct track *track)
 {
-    assert(direction == -1 || direction == +1);
+    mp_assert(direction == -1 || direction == +1);
     struct track *prev = NULL, *next = NULL;
     bool seen = track == NULL;
     for (int n = 0; n < mpctx->num_tracks; n++) {
@@ -2284,7 +2286,7 @@ static int mp_property_current_tracks(void *ctx, struct m_property *prop,
             break;
         }
     }
-    assert(index >= 0);
+    mp_assert(index >= 0);
 
     char *name = mp_tprintf(80, "track-list/%d%s%s", index, *rem ? "/" : "", rem);
     return mp_property_do(name, ka->action, ka->arg, ctx);
@@ -2296,12 +2298,11 @@ static int mp_property_hwdec_current(void *ctx, struct m_property *prop,
     MPContext *mpctx = ctx;
     struct track *track = mpctx->current_track[0][STREAM_VIDEO];
     struct mp_decoder_wrapper *dec = track ? track->dec : NULL;
+    char *current = NULL;
 
-    if (!dec)
+    if (!dec || !mp_decoder_wrapper_control(dec, VDCTRL_GET_HWDEC, &current))
         return M_PROPERTY_UNAVAILABLE;
 
-    char *current = NULL;
-    mp_decoder_wrapper_control(dec, VDCTRL_GET_HWDEC, &current);
     if (!current || !current[0])
         current = "no";
     return m_property_strdup_ro(action, arg, current);
@@ -3969,7 +3970,7 @@ static int do_op_udata(struct udata_ctx* ctx, int action, void *arg)
         return M_PROPERTY_OK;
     case M_PROPERTY_GET:
     case M_PROPERTY_GET_NODE: // same as GET, because type==mpv_node
-        assert(node);
+        mp_assert(node);
         m_option_copy(&udata_type, arg, node);
         return M_PROPERTY_OK;
     case M_PROPERTY_FIXED_LEN_PRINT:
@@ -3980,13 +3981,13 @@ static int do_op_udata(struct udata_ctx* ctx, int action, void *arg)
     }
     case M_PROPERTY_SET:
     case M_PROPERTY_SET_NODE:
-        assert(node);
+        mp_assert(node);
         m_option_copy(&udata_type, node, arg);
         talloc_steal(ctx->ta_parent, node_get_alloc(node));
         mp_notify_property(mpctx, ctx->path);
         return M_PROPERTY_OK;
     case M_PROPERTY_KEY_ACTION: {
-        assert(node);
+        mp_assert(node);
 
         // If we're operating on an array, sub-object access is handled by m_property_read_list
         if (node->format == MPV_FORMAT_NODE_ARRAY)
@@ -4748,9 +4749,16 @@ static void show_property_osd(MPContext *mpctx, const char *name, int osd_mode)
 {
     struct MPOpts *opts = mpctx->opts;
     struct property_osd_display disp = {.name = name, .osd_name = name};
+    struct command_ctx *cmd = mpctx->command_ctx;
 
     if (!osd_mode)
         return;
+
+    // hwdec is a special case that must wait until video reconfig
+    if (strcmp(name, "hwdec") == 0 && !cmd->hwdec_osd_mode) {
+        cmd->hwdec_osd_mode = osd_mode;
+        return;
+    }
 
     // look for the command
     for (const struct property_osd_display *p = property_osd_display; p->name; p++)
@@ -4991,7 +4999,7 @@ done:
 static void replace_overlay(struct MPContext *mpctx, int id, struct overlay *new)
 {
     struct command_ctx *cmd = mpctx->command_ctx;
-    assert(id >= 0);
+    mp_assert(id >= 0);
     if (id >= cmd->num_overlays) {
         MP_TARRAY_GROW(cmd, cmd->overlays, id);
         while (cmd->num_overlays <= id)
@@ -5433,7 +5441,7 @@ void run_command(struct MPContext *mpctx, struct mp_cmd *cmd,
     if (!ctx->abort && cmd->def->can_abort)
         ctx->abort = talloc_zero(ctx, struct mp_abort_entry);
 
-    assert(cmd->def->can_abort == !!ctx->abort);
+    mp_assert(cmd->def->can_abort == !!ctx->abort);
 
     if (ctx->abort) {
         ctx->abort->coupled_to_playback |= cmd->def->abort_on_playback_end;
@@ -6860,13 +6868,13 @@ static void cache_dump_poll(struct MPContext *mpctx)
         return;
 
     // Can't close demuxer without stopping dumping.
-    assert(mpctx->demuxer);
+    mp_assert(mpctx->demuxer);
 
     if (mp_cancel_test(cmd->abort->cancel)) {
         // Synchronous abort. In particular, the dump command shall not report
         // completion to the user before the dump target file was closed.
         demux_cache_dump_set(mpctx->demuxer, 0, 0, NULL);
-        assert(demux_cache_dump_get_status(mpctx->demuxer) <= 0);
+        mp_assert(demux_cache_dump_get_status(mpctx->demuxer) <= 0);
     }
 
     int status = demux_cache_dump_get_status(mpctx->demuxer);
@@ -6890,7 +6898,7 @@ void mp_abort_cache_dumping(struct MPContext *mpctx)
     if (ctx->cache_dump_cmd)
         mp_cancel_trigger(ctx->cache_dump_cmd->abort->cancel);
     cache_dump_poll(mpctx);
-    assert(!ctx->cache_dump_cmd); // synchronous abort, must have worked
+    mp_assert(!ctx->cache_dump_cmd); // synchronous abort, must have worked
 }
 
 static void run_dump_cmd(struct mp_cmd_ctx *cmd, double start, double end,
@@ -7493,7 +7501,7 @@ void command_uninit(struct MPContext *mpctx)
 {
     struct command_ctx *ctx = mpctx->command_ctx;
 
-    assert(!ctx->cache_dump_cmd); // closing the demuxer must have aborted it
+    mp_assert(!ctx->cache_dump_cmd); // closing the demuxer must have aborted it
 
     overlay_uninit(mpctx);
     ao_hotplug_destroy(ctx->hotplug);
@@ -7531,7 +7539,7 @@ void command_init(struct MPContext *mpctx)
     int count = num_base;
     for (int n = 0; n < num_opts; n++) {
         struct m_config_option *co = m_config_get_co_index(mpctx->mconfig, n);
-        assert(co->name[0]);
+        mp_assert(co->name[0]);
         if (co->opt->flags & M_OPT_NOPROP)
             continue;
 
@@ -7592,6 +7600,11 @@ static void command_event(struct MPContext *mpctx, int event, void *arg)
     if (event == MPV_EVENT_PLAYBACK_RESTART) {
         ctx->last_seek_time = mp_time_sec();
         run_command_opts(mpctx);
+    }
+
+    if (event == MPV_EVENT_VIDEO_RECONFIG && ctx->hwdec_osd_mode) {
+        show_property_osd(mpctx, "hwdec", ctx->hwdec_osd_mode);
+        ctx->hwdec_osd_mode = 0;
     }
 
     if (event == MPV_EVENT_IDLE)

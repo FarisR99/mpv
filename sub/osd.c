@@ -414,13 +414,6 @@ struct sub_bitmap_list *osd_render(struct osd_state *osd, struct mp_osd_res res,
         talloc_free(imgs);
     }
 
-    // If this is called with OSD_DRAW_SUB_ONLY or OSD_DRAW_OSD_ONLY set, assume
-    // it will always draw the complete OSD by doing multiple osd_draw() calls.
-    // OSD_DRAW_SUB_FILTER on the other hand is an evil special-case, and we
-    // must not reset the flag when it happens.
-    if (!(draw_flags & OSD_DRAW_SUB_FILTER))
-        osd->want_redraw_notification = false;
-
     double elapsed = MP_TIME_NS_TO_MS(mp_time_ns() - start_time);
     bool slow = elapsed > 5;
     mp_msg(osd->log, slow ? MSGL_DEBUG : MSGL_TRACE, "Spent %.3f ms in %s%s\n",
@@ -550,7 +543,7 @@ void osd_rescale_bitmaps(struct sub_bitmaps *imgs, int frame_w, int frame_h,
     double xscale = (double)vidw / frame_w;
     double yscale = (double)vidh / frame_h;
     if (compensate_par < 0) {
-        assert(res.display_par);
+        mp_assert(res.display_par);
         compensate_par = xscale / yscale / res.display_par / compensate_par * -1;
     }
     if (compensate_par > 0)
@@ -596,7 +589,7 @@ struct sub_bitmaps *sub_bitmaps_copy(struct sub_bitmap_copy_cache **p_cache,
 
     // The bitmaps being refcounted is essential for performance, and for
     // not invalidating in->parts[*].bitmap pointers.
-    assert(in->packed && in->packed->bufs[0]);
+    mp_assert(in->packed && in->packed->bufs[0]);
 
     res->packed = mp_image_new_ref(res->packed);
     talloc_steal(res, res->packed);

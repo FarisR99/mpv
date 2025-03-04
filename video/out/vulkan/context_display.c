@@ -26,7 +26,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "libmpv/render_gl.h"
+#include "mpv/render_gl.h"
 #include "video/out/drm_common.h"
 #endif
 
@@ -441,7 +441,7 @@ static bool display_init(struct ra_ctx *ctx)
     p->height = mode->parameters.visibleRegion.height;
     p->refresh_rate = mode->parameters.refreshRate;
 
-    struct ra_vk_ctx_params params = {0};
+    struct ra_ctx_params params = {0};
     if (!ra_vk_ctx_init(ctx, vk, params, VK_PRESENT_MODE_FIFO_KHR))
         goto error;
 

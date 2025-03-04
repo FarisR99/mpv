@@ -134,7 +134,7 @@ const struct m_sub_options vulkan_conf = {
 struct priv {
     struct mpvk_ctx *vk;
     struct vulkan_opts *opts;
-    struct ra_vk_ctx_params params;
+    struct ra_ctx_params params;
     struct ra_tex proxy_tex;
 };
 
@@ -225,8 +225,8 @@ pl_vulkan mppl_create_vulkan(struct vulkan_opts *opts,
     bool is_uuid = opts->device &&
                    av_uuid_parse(opts->device, param_uuid) == 0;
 
-    assert(pllog);
-    assert(vkinst);
+    mp_assert(pllog);
+    mp_assert(vkinst);
     struct pl_vulkan_params device_params = {
         .instance = vkinst->instance,
         .get_proc_addr = vkinst->get_proc_addr,
@@ -250,7 +250,7 @@ pl_vulkan mppl_create_vulkan(struct vulkan_opts *opts,
 }
 
 bool ra_vk_ctx_init(struct ra_ctx *ctx, struct mpvk_ctx *vk,
-                    struct ra_vk_ctx_params params,
+                    struct ra_ctx_params params,
                     VkPresentModeKHR preferred_mode)
 {
     struct ra_swapchain *sw = ctx->swapchain = talloc_zero(NULL, struct ra_swapchain);

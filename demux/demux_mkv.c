@@ -114,6 +114,7 @@ typedef struct mkv_track {
     int stereo_mode;
     struct pl_color_repr repr;
     struct pl_color_space color;
+    enum pl_chroma_location chroma_location;
     uint32_t v_crop_top, v_crop_left, v_crop_right, v_crop_bottom;
     float v_projection_pose_yaw;
     float v_projection_pose_pitch;
@@ -236,6 +237,7 @@ struct demux_mkv_opts {
     double subtitle_preroll_secs_index;
     int probe_duration;
     bool probe_start_time;
+    bool crop_compat;
 };
 
 const struct m_sub_options demux_mkv_conf = {
@@ -249,6 +251,7 @@ const struct m_sub_options demux_mkv_conf = {
         {"probe-video-duration", OPT_CHOICE(probe_duration,
             {"no", 0}, {"yes", 1}, {"full", 2})},
         {"probe-start-time", OPT_BOOL(probe_start_time)},
+        {"crop-compat", OPT_BOOL(crop_compat)},
         {0}
     },
     .size = sizeof(struct demux_mkv_opts),
@@ -257,6 +260,7 @@ const struct m_sub_options demux_mkv_conf = {
         .subtitle_preroll_secs = 1.0,
         .subtitle_preroll_secs_index = 10.0,
         .probe_start_time = true,
+        .crop_compat = true,
     },
     .change_flags = UPDATE_DEMUXER,
 };
@@ -581,6 +585,21 @@ static void parse_trackaudio(struct demuxer *demuxer, struct mkv_track *track,
     }
 }
 
+static inline enum pl_chroma_location
+chroma_location_from_pos(struct demuxer *demuxer, uint64_t h, uint64_t v)
+{
+    if (h > 2 || v > 2) {
+        MP_WARN(demuxer, "Invalid chroma location: %"PRIu64", %"PRIu64"\n", h, v);
+        return PL_CHROMA_UNKNOWN;
+    }
+    static const enum pl_chroma_location map[3][3] = {
+        { PL_CHROMA_UNKNOWN, PL_CHROMA_UNKNOWN, PL_CHROMA_UNKNOWN },
+        { PL_CHROMA_UNKNOWN, PL_CHROMA_TOP_LEFT, PL_CHROMA_LEFT },
+        { PL_CHROMA_UNKNOWN, PL_CHROMA_TOP_CENTER, PL_CHROMA_CENTER },
+    };
+    return map[h][v];
+}
+
 static void parse_trackcolour(struct demuxer *demuxer, struct mkv_track *track,
                               struct ebml_colour *colour)
 {
@@ -591,6 +610,13 @@ static void parse_trackcolour(struct demuxer *demuxer, struct mkv_track *track,
         track->repr.sys = pl_system_from_av(colour->matrix_coefficients);
         MP_DBG(demuxer, "|    + Matrix: %s\n",
                    m_opt_choice_str(pl_csp_names, track->repr.sys));
+    }
+    if (colour->n_chroma_siting_horz && colour->n_chroma_siting_vert) {
+        track->chroma_location = chroma_location_from_pos(demuxer,
+                                                          colour->chroma_siting_horz,
+                                                          colour->chroma_siting_vert);
+        MP_DBG(demuxer, "|    + ChromaLocation: %s\n",
+                   m_opt_choice_str(pl_chroma_names, track->chroma_location));
     }
     if (colour->n_primaries) {
         track->color.primaries = pl_primaries_from_av(colour->primaries);
@@ -1669,20 +1695,38 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track)
     sh_v->disp_w = track->v_width;
     sh_v->disp_h = track->v_height;
 
+    struct mp_rect crop;
+    crop.x0 = track->v_crop_left;
+    crop.y0 = track->v_crop_top;
+    crop.x1 = track->v_width - track->v_crop_right;
+    crop.y1 = track->v_height - track->v_crop_bottom;
+
     // Keep the codec crop rect as 0s if we have no cropping since the
     // file may have broken width/height tags.
     if (track->v_crop_left || track->v_crop_top ||
         track->v_crop_right || track->v_crop_bottom)
     {
-        sh_v->crop.x0 = track->v_crop_left;
-        sh_v->crop.y0 = track->v_crop_top;
-        sh_v->crop.x1 = track->v_width - track->v_crop_right;
-        sh_v->crop.y1 = track->v_height - track->v_crop_bottom;
+        sh_v->crop = crop;
     }
 
-    int dw = track->v_dwidth_set ? track->v_dwidth : track->v_width;
-    int dh = track->v_dheight_set ? track->v_dheight : track->v_height;
-    struct mp_image_params p = {.w = track->v_width, .h = track->v_height};
+    mkv_demuxer_t *mkv_d = demuxer->priv;
+
+    // The Matroska specification mandates that the PAR is calculated after
+    // cropping. However, most files on the internet do not follow this, as it
+    // would make them incompatible with crop-unaware players. Additionally,
+    // MKVToolNix does not automatically adjust DisplayWidth/DisplayHeight when
+    // cropping metadata is added, so most files created with it also do not
+    // follow the specification.
+    // See the following links for more information:
+    // <https://github.com/ietf-wg-cellar/matroska-specification/pull/947>
+    // <https://gitlab.com/mbunkus/mkvtoolnix/-/issues/2389>
+    // <https://github.com/mpv-player/mpv/pull/13446>
+    int crop_compat_w = mkv_d->opts->crop_compat ? track->v_width : mp_rect_w(crop);
+    int crop_compat_h = mkv_d->opts->crop_compat ? track->v_height : mp_rect_h(crop);
+
+    int dw = track->v_dwidth_set ? track->v_dwidth : crop_compat_w;
+    int dh = track->v_dheight_set ? track->v_dheight : crop_compat_h;
+    struct mp_image_params p = {.w = crop_compat_w, .h = crop_compat_h};
     mp_image_params_set_dsize(&p, dw, dh);
     sh_v->par_w = p.p_w;
     sh_v->par_h = p.p_h;
@@ -1690,6 +1734,7 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track)
     sh_v->stereo_mode = track->stereo_mode;
     sh_v->repr = track->repr;
     sh_v->color = track->color;
+    sh_v->chroma_location = track->chroma_location;
 
     if (track->v_projection_pose_roll) {
         int rotate = lrintf(fmodf(fmodf(-1 * track->v_projection_pose_roll, 360) + 360, 360));
@@ -2799,7 +2844,7 @@ static void mkv_parse_and_add_packet(demuxer_t *demuxer, mkv_track_t *track,
     if (track->parse && !track->av_parser) {
         int id = mp_codec_to_av_codec_id(track->stream->codec->codec);
         const AVCodec *codec = avcodec_find_decoder(id);
-        assert(!track->av_parser_codec);
+        mp_assert(!track->av_parser_codec);
         if (codec)
             track->av_parser_codec = avcodec_alloc_context3(codec);
         if (track->av_parser_codec)
@@ -3232,7 +3277,7 @@ static int read_next_block(demuxer_t *demuxer, struct block_info *block)
         if (res < 1)
             return res;
 
-        assert(mkv_d->num_blocks);
+        mp_assert(mkv_d->num_blocks);
     }
 
     *block = mkv_d->blocks[0];
@@ -3267,7 +3312,7 @@ static bool demux_mkv_read_packet(struct demuxer *demuxer,
 static mkv_index_t *get_highest_index_entry(struct demuxer *demuxer)
 {
     struct mkv_demuxer *mkv_d = demuxer->priv;
-    assert(!mkv_d->index_complete); // would require separate code
+    mp_assert(!mkv_d->index_complete); // would require separate code
 
     mkv_index_t *index = NULL;
     for (int n = 0; n < mkv_d->num_tracks; n++) {
