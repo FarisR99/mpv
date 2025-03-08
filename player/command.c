@@ -434,6 +434,7 @@ static int mp_property_generic_option(void *ctx, struct m_property *prop,
         m_option_copy(opt->opt, arg, opt->data);
         return M_PROPERTY_OK;
     case M_PROPERTY_SET:
+        opt->coalesce = prop->coalesce;
         if (m_config_set_option_raw(mpctx->mconfig, opt, arg, 0) < 0)
             return M_PROPERTY_ERROR;
         return M_PROPERTY_OK;
@@ -2115,7 +2116,7 @@ static int get_track_entry(int item, int action, void *arg, void *ctx)
             ka->key = rem;
             if (!rem[0]) {
                 ret = M_PROPERTY_ERROR;
-            } else if (!tags || tags->num_keys == 0) {
+            } else if (tags->num_keys == 0) {
                 ret = M_PROPERTY_UNAVAILABLE;
             } else {
                 ret = tag_property(action, (void *)ka, tags);
@@ -3557,7 +3558,7 @@ static int mp_property_protocols(void *ctx, struct m_property *prop,
 {
     switch (action) {
     case M_PROPERTY_GET:
-        *(char ***)arg = stream_get_proto_list();
+        *(char ***)arg = stream_get_proto_list(false);
         return M_PROPERTY_OK;
     case M_PROPERTY_GET_TYPE:
         *(struct m_option *)arg = (struct m_option){.type = CONF_TYPE_STRING_LIST};
@@ -5219,8 +5220,17 @@ static void show_property_status(struct mp_cmd_ctx *cmd, const char *name, int r
 static void change_property_cmd(struct mp_cmd_ctx *cmd,
                                 const char *name, int action, void *arg)
 {
+    struct m_property *prop = NULL;
+    if (cmd->cmd->coalesce) {
+        struct command_ctx *ctx = cmd->mpctx->command_ctx;
+        prop = m_property_list_find(ctx->properties, name);
+        if (prop)
+            prop->coalesce = true;
+    }
     int r = mp_property_do(name, action, arg, cmd->mpctx);
     show_property_status(cmd, name, r);
+    if (prop)
+        prop->coalesce = false;
 }
 
 static void cmd_cycle_values(void *p)
@@ -6205,15 +6215,17 @@ static void cmd_track_add(void *p)
     struct mp_cmd_ctx *cmd = p;
     struct MPContext *mpctx = cmd->mpctx;
     int type = *(int *)cmd->priv;
-    bool is_albumart = type == STREAM_VIDEO &&
-                       cmd->args[4].v.b;
+    int select = cmd->args[1].v.i & 3;
+    enum track_flags flags = cmd->args[1].v.i & ~3;
+    if (type == STREAM_VIDEO && cmd->args[4].v.b)
+        flags |= TRACK_ATTACHED_PICTURE;
 
     if (mpctx->stop_play) {
         cmd->success = false;
         return;
     }
 
-    if (cmd->args[1].v.i == 2) {
+    if (select == 2) {
         struct track *t = find_track_with_url(mpctx, type, cmd->args[0].v.s);
         if (t) {
             if (mpctx->playback_initialized) {
@@ -6226,7 +6238,7 @@ static void cmd_track_add(void *p)
         }
     }
     int first = mp_add_external_file(mpctx, cmd->args[0].v.s, type,
-                                     cmd->abort->cancel, is_albumart);
+                                     cmd->abort->cancel, flags);
     if (first < 0) {
         cmd->success = false;
         return;
@@ -6234,7 +6246,7 @@ static void cmd_track_add(void *p)
 
     for (int n = first; n < mpctx->num_tracks; n++) {
         struct track *t = mpctx->tracks[n];
-        if (cmd->args[1].v.i == 1) {
+        if (select == 1) {
             t->no_default = true;
         } else if (n == first) {
             if (mpctx->playback_initialized) {
@@ -6289,10 +6301,13 @@ static void cmd_track_reload(void *p)
 
     if (t && t->is_external && t->external_filename) {
         char *filename = talloc_strdup(NULL, t->external_filename);
-        bool is_albumart = t->attached_picture;
+        enum track_flags flags = 0;
+        flags |= t->attached_picture ? TRACK_ATTACHED_PICTURE : 0;
+        flags |= t->hearing_impaired_track ? TRACK_HEARING_IMPAIRED : 0;
+        flags |= t->visual_impaired_track ? TRACK_VISUAL_IMPAIRED : 0;
         mp_remove_track(mpctx, t);
         nt_num = mp_add_external_file(mpctx, filename, type, cmd->abort->cancel,
-                                      is_albumart);
+                                      flags);
         talloc_free(filename);
     }
 
@@ -6303,8 +6318,11 @@ static void cmd_track_reload(void *p)
 
     struct track *nt = mpctx->tracks[nt_num];
 
-    if (!nt->lang)
-        nt->lang = bstrto0(nt, mp_guess_lang_from_filename(bstr0(nt->external_filename), NULL));
+    if (!nt->lang) {
+        bstr lang = mp_guess_lang_from_filename(bstr0(nt->external_filename), NULL,
+                                                &nt->hearing_impaired_track);
+        nt->lang = bstrto0(nt, lang);
+    }
 
     mp_switch_track(mpctx, nt->type, nt, 0);
     print_track_list(mpctx, "Reloaded:");
@@ -7134,8 +7152,10 @@ const struct mp_cmd_def mp_cmds[] = {
     { "sub-add", cmd_track_add,
         {
             {"url", OPT_STRING(v.s)},
-            {"flags", OPT_CHOICE(v.i,
-                {"select", 0}, {"auto", 1}, {"cached", 2}),
+            {"flags", OPT_FLAGS(v.i,
+                {"select", 0}, {"auto", 1}, {"cached", 2},
+                {"hearing-impaired", TRACK_HEARING_IMPAIRED},
+                {"visual-impaired", TRACK_VISUAL_IMPAIRED}),
                 .flags = MP_CMD_OPT_ARG},
             {"title", OPT_STRING(v.s), .flags = MP_CMD_OPT_ARG},
             {"lang", OPT_STRING(v.s), .flags = MP_CMD_OPT_ARG},
@@ -7148,8 +7168,10 @@ const struct mp_cmd_def mp_cmds[] = {
     { "audio-add", cmd_track_add,
         {
             {"url", OPT_STRING(v.s)},
-            {"flags", OPT_CHOICE(v.i,
-                {"select", 0}, {"auto", 1}, {"cached", 2}),
+            {"flags", OPT_FLAGS(v.i,
+                {"select", 0}, {"auto", 1}, {"cached", 2},
+                {"hearing-impaired", TRACK_HEARING_IMPAIRED},
+                {"visual-impaired", TRACK_VISUAL_IMPAIRED}),
                 .flags = MP_CMD_OPT_ARG},
             {"title", OPT_STRING(v.s), .flags = MP_CMD_OPT_ARG},
             {"lang", OPT_STRING(v.s), .flags = MP_CMD_OPT_ARG},
@@ -7162,7 +7184,11 @@ const struct mp_cmd_def mp_cmds[] = {
     { "video-add", cmd_track_add,
         {
             {"url", OPT_STRING(v.s)},
-            {"flags", OPT_CHOICE(v.i, {"select", 0}, {"auto", 1}, {"cached", 2}),
+            {"flags", OPT_FLAGS(v.i,
+                {"select", 0}, {"auto", 1}, {"cached", 2},
+                {"hearing-impaired", TRACK_HEARING_IMPAIRED},
+                {"visual-impaired", TRACK_VISUAL_IMPAIRED},
+                {"attached-picture", TRACK_ATTACHED_PICTURE}),
                 .flags = MP_CMD_OPT_ARG},
             {"title", OPT_STRING(v.s), .flags = MP_CMD_OPT_ARG},
             {"lang", OPT_STRING(v.s), .flags = MP_CMD_OPT_ARG},
@@ -7657,6 +7683,7 @@ void run_command_opts(struct MPContext *mpctx)
     for (int i = 0; opts->input_commands[i]; i++) {
         struct mp_cmd *cmd = mp_input_parse_cmd(mpctx->input, bstr0(opts->input_commands[i]),
                                                 "the command line");
+        cmd->coalesce = true;
         mp_input_queue_cmd(mpctx->input, cmd);
     }
     ctx->command_opts_processed = true;
@@ -7715,6 +7742,13 @@ void mp_option_change_callback(void *ctx, struct m_config_option *co, uint64_t f
     if (self_update)
         return;
 
+    // Run these immediately.
+    if (co && !co->coalesce) {
+        struct mp_option_callback callback = {.co = co, .flags = flags};
+        mp_option_run_callback(mpctx, &callback);
+        return;
+    }
+
     // Coalesce redundant updates and only keep the newest one.
     bool drop = false;
     for (int i = 0; i < mpctx->num_option_callbacks; i++) {
@@ -7737,12 +7771,12 @@ void mp_option_change_callback(void *ctx, struct m_config_option *co, uint64_t f
     }
 }
 
-void mp_option_run_callback(struct MPContext *mpctx, int index)
+void mp_option_run_callback(struct MPContext *mpctx, struct mp_option_callback *callback)
 {
     struct MPOpts *opts = mpctx->opts;
-    struct m_config_option *co = mpctx->option_callbacks[index].co;
+    struct m_config_option *co = callback->co;
     void *opt_ptr = co ? co->data : NULL;
-    uint64_t flags = mpctx->option_callbacks[index].flags;
+    uint64_t flags = callback->flags;
 
     if (flags & UPDATE_TERM)
         mp_update_logging(mpctx, false);

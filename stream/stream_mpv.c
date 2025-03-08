@@ -15,25 +15,20 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef MPLAYER_FIND_SUBFILES_H
-#define MPLAYER_FIND_SUBFILES_H
+#include "stream.h"
 
-#include <stdbool.h>
+#include <misc/path_utils.h>
+#include <player/core.h>
 
-struct subfn {
-    int type; // STREAM_SUB/STREAM_AUDIO/STREAM_VIDEO(coverart)
-    int priority;
-    char *fname;
-    char *lang;
-    bool hearing_impaired;
+static int open_mpv(stream_t *st)
+{
+    st->demuxer = "mpv";
+    return STREAM_OK;
+}
+
+const stream_info_t stream_info_mpv = {
+    .name = "mpv",
+    .open = open_mpv,
+    .stream_origin = STREAM_ORIGIN_NET,
+    .protocols = (const char*const[]){"mpv", NULL},
 };
-
-struct mpv_global;
-struct MPOpts;
-struct subfn *find_external_files(struct mpv_global *global, const char *fname,
-                                  struct MPOpts *opts);
-
-bool mp_might_be_subtitle_file(const char *filename);
-void mp_update_subtitle_exts(struct MPOpts *opts);
-
-#endif /* MPLAYER_FINDFILES_H */
