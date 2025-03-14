@@ -802,7 +802,7 @@ Configuration Commands
 
     The mode argument:
 
-    ``default``
+    ``apply``
         Apply the profile. Default if the argument is omitted.
 
     ``restore``
@@ -4043,7 +4043,6 @@ Property list
     See ``--clipboard-backends`` option for the list of available backends.
 
 ``clock``
-
     The current local time in hour:minutes format.
 
 Inconsistencies between options and properties

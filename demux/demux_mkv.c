@@ -1867,6 +1867,7 @@ static const char *const mkv_audio_tags[][2] = {
     { "A_ALAC",                 "alac" },
     { "A_TTA1",                 "tta" },
     { "A_MLP",                  "mlp" },
+    { "A_ATRAC/AT1",            "atrac1" },
     { NULL },
 };
 
@@ -1969,12 +1970,16 @@ static int demux_mkv_open_audio(demuxer_t *demuxer, mkv_track_t *track)
             if (flavor >= MP_ARRAY_SIZE(atrc_fl2bps))
                 goto error;
             sh_a->bitrate = atrc_fl2bps[flavor] * 8;
+            if (!track->sub_packet_size || track->audiopk_size % track->sub_packet_size)
+                goto error;
             sh_a->block_align = track->sub_packet_size;
         } else if (!strcmp(track->codec_id, "A_REAL/COOK")) {
             sh_a->codec = "cook";
             if (flavor >= MP_ARRAY_SIZE(cook_fl2bps))
                 goto error;
             sh_a->bitrate = cook_fl2bps[flavor] * 8;
+            if (!track->sub_packet_size || track->audiopk_size % track->sub_packet_size)
+                goto error;
             sh_a->block_align = track->sub_packet_size;
         } else if (!strcmp(track->codec_id, "A_REAL/SIPR")) {
             sh_a->codec = "sipr";
@@ -1985,6 +1990,10 @@ static int demux_mkv_open_audio(demuxer_t *demuxer, mkv_track_t *track)
         } else if (!strcmp(track->codec_id, "A_REAL/28_8")) {
             sh_a->codec = "ra_288";
             sh_a->bitrate = 3600 * 8;
+            if (track->sub_packet_h & 1)
+                goto error;
+            if (2 * track->audiopk_size != (int64_t)track->sub_packet_h * track->coded_framesize)
+                goto error;
             sh_a->block_align = track->coded_framesize;
         } else if (!strcmp(track->codec_id, "A_REAL/DNET")) {
             sh_a->codec = "ac3";
@@ -2084,14 +2093,19 @@ static int demux_mkv_open_audio(demuxer_t *demuxer, mkv_track_t *track)
         AV_WL16(data + 6, sh_a->channels.num);
         AV_WL16(data + 8, sh_a->bits_per_coded_sample);
         AV_WL32(data + 10, track->a_osfreq);
-        // Bogus: last frame won't be played.
-        AV_WL32(data + 14, 0);
+        mkv_demuxer_t *mkv_d = demuxer->priv;
+        AV_WL32(data + 14, mkv_d->duration * track->a_osfreq);
     } else if (!strcmp(codec, "opus")) {
         // Hardcode the rate libavcodec's opus decoder outputs, so that
         // AV_PKT_DATA_SKIP_SAMPLES actually works. The Matroska header only
         // has an arbitrary "input" samplerate, while libavcodec is fixed to
         // output 48000.
         sh_a->samplerate = 48000;
+    } else if (!strcmp(codec, "atrac1")) {
+        if (sh_a->channels.num > 8)
+            goto error;
+        // ATRAC1 uses a constant frame size.
+        sh_a->block_align = sh_a->channels.num * 212;
     }
 
     // Some files have broken default DefaultDuration set, which will lead to
