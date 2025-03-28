@@ -1998,7 +1998,7 @@ static void registry_handle_add(void *data, struct wl_registry *reg, uint32_t id
 
 #if HAVE_WAYLAND_PROTOCOLS_1_32
     if (!strcmp(interface, wp_cursor_shape_manager_v1_interface.name) && found++) {
-        ver = 1;
+        ver = MPMIN(ver, 2);
         wl->cursor_shape_manager = wl_registry_bind(reg, id, &wp_cursor_shape_manager_v1_interface, ver);
     }
 #endif
@@ -2485,8 +2485,8 @@ static int handle_round(int scale, int n)
 
 static void prepare_resize(struct vo_wayland_state *wl)
 {
-    int32_t width = mp_rect_w(wl->geometry) / wl->scaling_factor;
-    int32_t height = mp_rect_h(wl->geometry) / wl->scaling_factor;
+    const int32_t width = lrint(mp_rect_w(wl->geometry) / wl->scaling_factor);
+    const int32_t height = lrint(mp_rect_h(wl->geometry) / wl->scaling_factor);
     xdg_surface_set_window_geometry(wl->xdg_surface, 0, 0, width, height);
     wl->pending_vo_events |= VO_EVENT_RESIZE;
 }
@@ -3504,8 +3504,8 @@ bool vo_wayland_reconfig(struct vo *vo)
 
 void vo_wayland_set_opaque_region(struct vo_wayland_state *wl, bool alpha)
 {
-    const int32_t width = mp_rect_w(wl->geometry);
-    const int32_t height = mp_rect_h(wl->geometry);
+    const int32_t width = lrint(mp_rect_w(wl->geometry) / wl->scaling_factor);
+    const int32_t height = lrint(mp_rect_h(wl->geometry) / wl->scaling_factor);
     if (!alpha) {
         struct wl_region *region = wl_compositor_create_region(wl->compositor);
         wl_region_add(region, 0, 0, width, height);

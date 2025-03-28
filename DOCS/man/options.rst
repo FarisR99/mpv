@@ -47,7 +47,6 @@ Track Selection
     ``--audio`` is an alias for ``--aid``.
 
     ``--aid=no`` or ``--audio=no`` disables audio playback.
-    (The latter variant does not work with the client API.)
 
     .. note::
 
@@ -103,7 +102,6 @@ Track Selection
     ``--sub`` is an alias for ``--sid``.
 
     ``--sid=no`` or ``--sub=no`` disables subtitle decoding.
-    (The latter variant does not work with the client API.)
 
 ``--vid=<ID|auto|no>``
     Select video channel. ``auto`` selects the default, ``no`` disables video.
@@ -111,7 +109,6 @@ Track Selection
     ``--video`` is an alias for ``--vid``.
 
     ``--vid=no`` or ``--video=no`` disables video playback.
-    (The latter variant does not work with the client API.)
 
     If video is disabled, mpv will try to download the audio only if media is
     streamed with youtube-dl, because it saves bandwidth. This is done by
@@ -1832,7 +1829,7 @@ Video
     You can get the list of allowed codecs with ``mpv --vd=help``. Remove the
     prefix, e.g. instead of ``lavc:h264`` use ``h264``.
 
-    By default, this is set to ``h264,vc1,hevc,vp8,vp9,av1,prores``. Note that
+    By default, this is set to ``h264,vc1,hevc,vp8,vp9,av1,prores,ffv1``. Note that
     the hardware acceleration special codecs like ``h264_vdpau`` are not
     relevant anymore, and in fact have been removed from FFmpeg in this form.
 
