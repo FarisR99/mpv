@@ -615,7 +615,7 @@ const char *m_opt_choice_str(const struct m_opt_choice_alternatives *choices,
         if (c->value == value)
             return c->name;
     }
-    return NULL;
+    mp_require(false && "Invalid choice value!");
 }
 
 static void print_choice_values(struct mp_log *log, const struct m_option *opt)
@@ -3009,7 +3009,7 @@ static bool obj_settings_list_insert_at(struct mp_log *log,
     // items, and it quickly starts taking ages to add all items.
     if (num > 100) {
         mp_warn(log, "Object settings list capacity exceeded: "
-                     "a maximum of 100 elements is allowed.");
+                     "a maximum of 100 elements is allowed.\n");
         return false;
     }
     if (idx < 0)

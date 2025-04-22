@@ -517,8 +517,9 @@ static void resize(struct vo *vo)
 
     const int width = mp_rect_w(wl->geometry);
     const int height = mp_rect_h(wl->geometry);
+    vo_get_src_dst_rects(vo, &src, &dst, &p->screen_osd_res);
 
-    if (width == 0 || height == 0)
+    if (width == 0 || height == 0 || mp_rect_w(dst) == 0 || mp_rect_h(dst) == 0)
         return;
 
     vo_wayland_set_opaque_region(wl, false);
@@ -675,14 +676,9 @@ static void get_vsync(struct vo *vo, struct vo_vsync_info *info)
         present_sync_get_info(wl->present, info);
 }
 
-static bool is_supported_fmt(int fmt)
-{
-    return (fmt == IMGFMT_DRMPRIME || fmt == IMGFMT_VAAPI);
-}
-
 static int query_format(struct vo *vo, int format)
 {
-    return is_supported_fmt(format);
+    return format == IMGFMT_DRMPRIME || format == IMGFMT_VAAPI;
 }
 
 static const int32_t transform_enum_lut[4][2] = {
@@ -692,6 +688,23 @@ static const int32_t transform_enum_lut[4][2] = {
 static int reconfig(struct vo *vo, struct mp_image *img)
 {
     struct priv *p = vo->priv;
+
+    switch (img->imgfmt) {
+    case IMGFMT_VAAPI:
+        p->hwdec_type = HWDEC_VAAPI;
+        break;
+    case IMGFMT_DRMPRIME:
+        p->hwdec_type = HWDEC_DRMPRIME;
+        break;
+    default:
+        p->hwdec_type = HWDEC_NONE;
+    }
+
+    if (p->hwdec_type == HWDEC_NONE) {
+        MP_ERR(vo, "Format '%s' is not a valid hardware accelerated format!\n",
+               mp_imgfmt_to_name(img->imgfmt));
+        return VO_ERROR;
+    }
 
     if (img->params.force_window) {
         p->force_window = true;
@@ -840,33 +853,10 @@ static int preinit(struct vo *vo)
         .global = p->global,
         .ra_ctx = p->ctx,
     };
-    ra_hwdec_ctx_init(&p->hwdec_ctx, vo->hwdec_devs, NULL, true);
 
-    // Loop through hardware accelerated formats and only request known
-    // supported formats.
-    for (int i = IMGFMT_VDPAU_OUTPUT; i < IMGFMT_AVPIXFMT_START; ++i) {
-        if (is_supported_fmt(i)) {
-            struct hwdec_imgfmt_request params = {
-                .imgfmt = i,
-                .probing = false,
-            };
-            ra_hwdec_ctx_load_fmt(&p->hwdec_ctx, vo->hwdec_devs, &params);
-        }
-    }
-
-    for (int i = 0; i < p->hwdec_ctx.num_hwdecs; i++) {
-        struct ra_hwdec *hw = p->hwdec_ctx.hwdecs[i];
-        if (ra_get_native_resource(p->ctx->ra, "VADisplay")) {
-            p->hwdec_type = HWDEC_VAAPI;
-        } else if (strcmp(hw->driver->name, "drmprime") == 0) {
-            p->hwdec_type = HWDEC_DRMPRIME;
-        }
-    }
-
-    if (p->hwdec_type == HWDEC_NONE) {
-        MP_ERR(vo, "No valid hardware decoding driver could be loaded!\n");
-        goto err;
-    }
+    // Initialize all possible hwdec drivers.
+    ra_hwdec_ctx_init(&p->hwdec_ctx, vo->hwdec_devs, "vaapi", false);
+    ra_hwdec_ctx_init(&p->hwdec_ctx, vo->hwdec_devs, "drmprime", false);
 
     p->src = (struct mp_rect){0, 0, 0, 0};
     return 0;
