@@ -1006,7 +1006,6 @@ if features['d3d11']
     sources += files('video/out/d3d11/context.c',
                      'video/out/d3d11/ra_d3d11.c',
                      'video/filter/vf_gpu_d3d11.c')
-    features += {'dxgi-debug-d3d11': cc.has_header_symbol('d3d11sdklayers.h', 'DXGI_DEBUG_D3D11')}
 endif
 
 wayland = {
@@ -1201,6 +1200,7 @@ endif
 
 if features['d3d11'] or features['egl-angle-win32']
     sources += files('video/out/gpu/d3d11_helpers.c')
+    features += {'dxgi-debug-d3d11': cc.has_header_symbol('d3d11sdklayers.h', 'DXGI_DEBUG_D3D11')}
 endif
 
 egl = dependency('egl', version: '>= 1.4.0', required: get_option('egl'))
