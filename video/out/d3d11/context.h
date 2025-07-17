@@ -3,6 +3,7 @@
 #include <dxgi.h>
 
 #include "video/out/gpu/context.h"
+#include "video/out/gpu/d3d11_helpers.h"
 #include "common.h"
 
 struct d3d11_opts {
@@ -14,6 +15,7 @@ struct d3d11_opts {
     int output_format;
     int color_space;
     bool exclusive_fs;
+    int output_mode;
 };
 
 struct priv {
@@ -33,6 +35,8 @@ struct priv {
     int64_t last_sync_qpc_time;
     int64_t vsync_duration_qpc;
     int64_t last_submit_qpc;
+
+    struct mp_dxgi_factory_ctx dxgi_ctx;
 };
 
 // Get the underlying D3D11 swap chain from an RA context. The returned swap chain is

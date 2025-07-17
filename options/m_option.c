@@ -120,15 +120,10 @@ int m_option_required_params(const m_option_t *opt)
 }
 
 int m_option_set_node_or_string(struct mp_log *log, const m_option_t *opt,
-                                const char *name, void *dst, struct mpv_node *src)
+                                struct bstr name, void *dst, struct mpv_node *src)
 {
     if (src->format == MPV_FORMAT_STRING) {
-        // The af and vf option unfortunately require this, because the
-        // option name includes the "action".
-        bstr optname = bstr0(name), a, b;
-        if (bstr_split_tok(optname, "/", &a, &b))
-            optname = b;
-        return m_option_parse(log, opt, optname, bstr0(src->u.string), dst);
+        return m_option_parse(log, opt, name, bstr0(src->u.string), dst);
     } else {
         return m_option_set_node(opt, dst, src);
     }
@@ -611,11 +606,20 @@ const m_option_type_t m_option_type_byte_size = {
 const char *m_opt_choice_str(const struct m_opt_choice_alternatives *choices,
                              int value)
 {
+    const char *val = m_opt_choice_str_def(choices, value, NULL);
+    if (val)
+        return val;
+    mp_require(false && "Invalid choice value!");
+}
+
+const char *m_opt_choice_str_def(const struct m_opt_choice_alternatives *choices,
+                                 int value, const char *def)
+{
     for (const struct m_opt_choice_alternatives *c = choices; c->name; c++) {
         if (c->value == value)
             return c->name;
     }
-    mp_require(false && "Invalid choice value!");
+    return def;
 }
 
 static void print_choice_values(struct mp_log *log, const struct m_option *opt)
