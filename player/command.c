@@ -559,8 +559,12 @@ static int mp_property_stream_open_filename(void *ctx, struct m_property *prop,
         return M_PROPERTY_OK;
     }
     case M_PROPERTY_GET_TYPE:
-    case M_PROPERTY_GET:
-        return m_property_strdup_ro(action, arg, mpctx->stream_open_filename);
+    case M_PROPERTY_GET: {
+        char *path = mp_normalize_path(NULL, mpctx->stream_open_filename);
+        int r = m_property_strdup_ro(action, arg, path);
+        talloc_free(path);
+        return r;
+    }
     }
     return M_PROPERTY_NOT_IMPLEMENTED;
 }
@@ -3632,7 +3636,10 @@ static int mp_property_current_watch_later_dir(void *ctx, struct m_property *pro
                                                int action, void *arg)
 {
     MPContext *mpctx = ctx;
-    return m_property_strdup_ro(action, arg, mp_get_playback_resume_dir(mpctx));
+    char *dir = mp_get_playback_resume_dir(mpctx);
+    int r = m_property_strdup_ro(action, arg, dir);
+    talloc_free(dir);
+    return r;
 }
 
 static int mp_property_protocols(void *ctx, struct m_property *prop,
@@ -6950,8 +6957,9 @@ static void cmd_load_input_conf(void *p)
     struct mp_cmd_ctx *cmd = p;
     struct MPContext *mpctx = cmd->mpctx;
 
-    char *config_file = cmd->args[0].v.s;
+    char *config_file = mp_get_user_path(NULL, mpctx->global, cmd->args[0].v.s);
     cmd->success = mp_input_load_config_file(mpctx->input, config_file);
+    talloc_free(config_file);
 }
 
 static void cmd_load_script(void *p)
