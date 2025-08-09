@@ -29,6 +29,7 @@
 #include "config.h"
 #include "options/m_config.h"
 #include "options/options.h"
+#include "options/path.h"
 #include "common/common.h"
 #include "common/msg.h"
 #include "demux/demux.h"
@@ -75,7 +76,7 @@ const struct m_sub_options mp_sub_filter_opts = {
     .opts = (const struct m_option[]){
         {"sdh", OPT_BOOL(sub_filter_SDH)},
         {"sdh-harder", OPT_BOOL(sub_filter_SDH_harder)},
-        {"sdh-enclosures", OPT_STRING(sub_filter_SDH_enclosures)},
+        {"sdh-enclosures", OPT_STRINGLIST(sub_filter_SDH_enclosures)},
         {"regex-enable", OPT_BOOL(rf_enable)},
         {"regex-plain", OPT_BOOL(rf_plain)},
         {"regex", OPT_STRINGLIST(rf_items)},
@@ -85,7 +86,12 @@ const struct m_sub_options mp_sub_filter_opts = {
     },
     .size = sizeof(OPT_BASE_STRUCT),
     .defaults = &(OPT_BASE_STRUCT){
-        .sub_filter_SDH_enclosures = "([\uFF08",
+        .sub_filter_SDH_enclosures = (char *[]) {
+            "()",
+            "[]",
+            "\uFF08\uFF09",
+            NULL
+        },
         .rf_enable = true,
     },
     .change_flags = UPDATE_SUB_FILT,
@@ -108,11 +114,14 @@ static const struct sd_filter_functions *const filters[] = {
 
 // Add default styles, if the track does not have any styles yet.
 // Apply style overrides if the user provides any.
-static void mp_ass_add_default_styles(ASS_Track *track, struct mp_subtitle_opts *opts,
-                                      struct mp_subtitle_shared_opts *shared_opts, int order)
+static void mp_ass_add_default_styles(struct sd *sd, ASS_Track *track, struct mp_subtitle_opts *opts,
+                                      struct mp_subtitle_shared_opts *shared_opts)
 {
-    if (opts->ass_styles_file && shared_opts->ass_style_override[order])
-        ass_read_styles(track, opts->ass_styles_file, NULL);
+    if (opts->ass_styles_file && shared_opts->ass_style_override[sd->order]) {
+        char *file = mp_get_user_path(NULL, sd->global, opts->ass_styles_file);
+        ass_read_styles(track, file, NULL);
+        talloc_free(file);
+    }
 
     if (track->n_styles == 0) {
         if (!track->PlayResY) {
@@ -127,7 +136,7 @@ static void mp_ass_add_default_styles(ASS_Track *track, struct mp_subtitle_opts 
         mp_ass_set_style(style, track->PlayResY, opts->sub_style);
     }
 
-    if (shared_opts->ass_style_override[order])
+    if (shared_opts->ass_style_override[sd->order])
         ass_process_force_style(track);
 }
 
@@ -256,7 +265,7 @@ static void assobjects_init(struct sd *sd)
     ctx->shadow_track = ass_new_track(ctx->ass_library);
     ctx->shadow_track->PlayResX = MP_ASS_FONT_PLAYRESX;
     ctx->shadow_track->PlayResY = MP_ASS_FONT_PLAYRESY;
-    mp_ass_add_default_styles(ctx->shadow_track, opts, shared_opts, sd->order);
+    mp_ass_add_default_styles(sd, ctx->shadow_track, opts, shared_opts);
 
     char *extradata = sd->codec->extradata;
     int extradata_size = sd->codec->extradata_size;
@@ -267,7 +276,7 @@ static void assobjects_init(struct sd *sd)
     if (extradata)
         ass_process_codec_private(ctx->ass_track, extradata, extradata_size);
 
-    mp_ass_add_default_styles(ctx->ass_track, opts, shared_opts, sd->order);
+    mp_ass_add_default_styles(sd, ctx->ass_track, opts, shared_opts);
 
 #if LIBASS_VERSION >= 0x01302000
     ass_set_check_readorder(ctx->ass_track, sd->opts->sub_clear_on_seek ? 0 : 1);

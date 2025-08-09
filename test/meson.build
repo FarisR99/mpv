@@ -22,10 +22,8 @@ test_utils_files = [
     'options/m_config_core.c',
     'options/m_config_frontend.c',
     'options/m_option.c',
-    'options/path.c',
     'osdep/io.c',
     'osdep/timer.c',
-    path_source,
     timer_source,
     'ta/ta.c',
     'ta/ta_talloc.c',
@@ -112,22 +110,24 @@ codepoint_width = executable('codepoint-width', files('codepoint_width.c'),
                              include_directories: incdir, link_with: test_utils)
 test('codepoint-width', codepoint_width)
 
-paths = executable('paths', 'paths.c', include_directories: incdir, link_with: test_utils)
+paths_objects = libmpv.extract_objects('options/path.c', path_source)
+paths = executable('paths', 'paths.c', include_directories: incdir,
+                   objects: paths_objects, link_with: test_utils)
 test('paths', paths)
 
 if get_option('libmpv')
     file = join_paths(source_root, 'etc', 'mpv-icon-8bit-16x16.png')
 
     exe = executable('libmpv-test-file-loading', 'libmpv_test_file_loading.c',
-                     dependencies: libmpv_dep)
+                     include_directories: incdir, dependencies: libmpv_dep)
     test('libmpv-test-file-loading', exe, args: file, suite: 'libmpv')
 
     exe = executable('libmpv-test-lavfi-complex', 'libmpv_test_lavfi_complex.c',
-                     dependencies: libmpv_dep)
+                     include_directories: incdir, dependencies: libmpv_dep)
     test('libmpv-test-lavfi-complex', exe, args: file, suite: 'libmpv')
 
     exe = executable('libmpv-test-options', 'libmpv_test_options.c',
-                     dependencies: libmpv_dep)
+                     include_directories: incdir, dependencies: libmpv_dep)
     test('libmpv-test-options', exe, suite: 'libmpv')
 
     # Old versions of ffmpeg are bugged when setting forced tracks and older
