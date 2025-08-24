@@ -826,6 +826,7 @@ static void apply_target_contrast(struct priv *p, struct pl_color_space *color, 
     // Infinite contrast
     if (opts->target_contrast == -1) {
         color->hdr.min_luma = 1e-7;
+        mp_assert(color->hdr.min_luma > 0);
         return;
     }
 
@@ -1080,7 +1081,7 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
     // reports it as maxFALL directly, but this doesn't mean the same thing.
     target_csp.hdr.max_fall = 0;
 
-    struct pl_color_space hint;
+    struct pl_color_space hint = {0};
     bool target_hint = p->next_opts->target_hint == 1 ||
                        (p->next_opts->target_hint == -1 &&
                         target_csp.transfer != PL_COLOR_TRC_UNKNOWN);
@@ -1093,6 +1094,10 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
         const struct pl_color_space *source = &frame->current->params.color;
         const struct pl_color_space *target = &target_csp;
         hint = *source;
+        // Apply target contrast to the hint, this is important for SDR, because
+        // libplacebo defaults to 1000:1 contrast ratio otherwise.
+        if (!hint.hdr.min_luma)
+            hint.hdr.min_luma = target->hdr.min_luma;
         if (p->next_opts->target_hint_mode == 0) {
             hint = *target;
             if (pl_color_transfer_is_hdr(hint.transfer) && !pl_primaries_valid(&hint.hdr.prim))
@@ -1112,7 +1117,7 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
                 .color      = &hint,
                 .metadata   = PL_HDR_METADATA_ANY,
                 .scaling    = PL_HDR_NITS,
-                .out_min    = &hint.hdr.min_luma,
+                .out_min    = !hint.hdr.min_luma ? &hint.hdr.min_luma : NULL,
                 .out_max    = &hint.hdr.max_luma,
             ));
             // Set maxCLL to dynamic max luminance. Note that libplacebo uses
@@ -1160,9 +1165,27 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
         if (hint.hdr.max_cll && hint.hdr.max_fall > hint.hdr.max_cll)
             hint.hdr.max_fall = 0;
         apply_target_contrast(p, &hint, hint.hdr.min_luma);
+        if (p->icc_profile)
+            hint = p->icc_profile->csp;
+        if (opts->icc_opts->icc_use_luma) {
+            p->icc_params.max_luma = 0.0f;
+        } else {
+            pl_color_space_nominal_luma_ex(pl_nominal_luma_params(
+                .color    = &hint,
+                .metadata = PL_HDR_METADATA_HDR10, // use only static HDR nits
+                .scaling  = PL_HDR_NITS,
+                .out_max  = &p->icc_params.max_luma,
+            ));
+        }
+        pl_icc_update(p->pllog, &p->icc_profile, NULL, &p->icc_params);
+        // Update again after possible max_luma change
+        if (p->icc_profile)
+            hint = p->icc_profile->csp;
         if (!pass_colorspace)
             pl_swapchain_colorspace_hint(p->sw, &hint);
     } else if (!target_hint) {
+        if (!hint.hdr.min_luma)
+            hint.hdr.min_luma = target_csp.hdr.min_luma;
         pl_swapchain_colorspace_hint(p->sw, NULL);
     }
 
