@@ -1066,6 +1066,11 @@ Program Behavior
     Enable the builtin script that lets you select from lists of items (default:
     yes). By default, its keybindings start with the ``g`` key.
 
+``--load-context-menu=<yes|no>``
+    Enable the builtin script that implements a context menu. Defaults to
+    ``yes`` on platforms where integration with a native context menu is not
+    implemented, and to ``no`` on platform where it is.
+
 ``--load-positioning=<yes|no>``
     Enable the builtin script that provides various keybindings to pan videos
     and images (default: yes).
@@ -1994,6 +1999,8 @@ Video
     upper limit, the implementation can use a lower latency than requested
     internally. A setting of 1 means that the VO will wait for every frame to
     become visible before starting to render the next frame. (Default: 3)
+    If ``--video-sync=display-*`` is used, this option is ignored and the depth
+    is always 1.
 
 Audio
 -----
@@ -3648,7 +3655,7 @@ Window
 
 ``--force-render``
     Forces mpv to always render frames regardless of the visibility of the
-    window. Currently only affects X11 and Wayland VOs since they are the
+    window. Currently only affects X11, Wayland and macvk VOs since they are the
     only ones that have this optimization (i.e. everything else always renders
     regardless of visibility).
 
@@ -3738,12 +3745,24 @@ Window
     On win32, the ID is interpreted as ``HWND``. Pass it as value cast to
     ``uint32_t`` (all Windows handles are 32-bit), this is important as mpv will
     not accept negative values. mpv will create its own window and set the
-    wid window as parent, like with X11.
+    wid window as parent, like with X11. The value ``0`` is interpreted
+    specially, and mpv will draw on top of the desktop wallpaper and below
+    desktop icons.
 
     On Android, the ID is interpreted as ``android.view.Surface``. Pass it as a
     value cast to ``intptr_t``. Use with ``--vo=mediacodec_embed`` and
     ``--hwdec=mediacodec`` for direct rendering using MediaCodec, or with
     ``--vo=gpu --gpu-context=android`` (with or without ``--hwdec=mediacodec``).
+
+    .. note::
+
+        On win32, if desktop wallpaper transition occurs (e.g. setting desktop
+        slideshow of multiple images in Windows settings) and an ID value ``0``
+        is used, Windows may sometimes destroy the window mpv is attached to.
+        mpv will simply treat this as a quit signal in this case.
+
+        To prevent this from happening, set a static desktop wallpaper,
+        such as single image or pure color.
 
 ``--window-dragging=<yes|no>``
     Move the window when clicking on it and moving the mouse pointer (default: yes).
@@ -3877,6 +3896,10 @@ Disc Devices
 
 ``--dvd-angle=<ID>``
     Some DVDs contain scenes that can be viewed from multiple angles.
+    This option tells mpv which angle to use (default: 1).
+
+``--bluray-angle=<ID>``
+    Some Blu-ray discs contain scenes that can be viewed from multiple angles.
     This option tells mpv which angle to use (default: 1).
 
 
@@ -6916,6 +6939,13 @@ them.
 
     Android with ``--gpu-context=android`` only.
 
+``--d3d11-composition-size=<WxH>``
+    Set size of the output for d3d11 composition mode.
+    When use composition mode, there is no window, must set the output size by
+    the embedding application.
+
+    Windows with ``--gpu-context=d3d11`` and  ``--d3d11-output-mode=composition`` only.
+
 ``--gpu-sw``
     Continue even if a software renderer is detected. This only works with
     OpenGL/Vulkan backends. For d3d11, see ``--d3d11-warp``.
@@ -7957,6 +7987,11 @@ Miscellaneous
 ``--media-controls=<yes|no>``
     (Windows only)
     Enable integration of media control interface SystemMediaTransportControls.
+
+    Windows may display "Unknown app" or show a missing mpv icon in the media
+    control panel. To fully support it, you need to register mpv using the
+    ``--register`` command.
+
     Default: yes (except for libmpv)
 
 ``--force-media-title=<string>``
@@ -8201,3 +8236,72 @@ Miscellaneous
     On Wayland, this option only has effect on the ``wayland`` backend, and
     not for the ``vo`` backend. See ``current-clipboard-backend`` property for
     more details.
+
+``--register``
+    (Windows only) (available also as mpv-register helper)
+
+    Registers mpv as a media player on Windows. This includes adding registry
+    entries to associate mpv with media files and protocols, as well as enabling
+    autoplay handlers for Blu-ray, DVD, and CD-Audio.
+
+    Note that the registration is done in-place, so the current mpv.exe path will
+    be used. If you move mpv after registering it, you can re-run this command to
+    update the registry entries. You can also ``--unregister`` at any time and
+    using any mpv binary that supports this command, it doesn't have to be
+    specifically the one that was used to register it.
+
+    When using this option, mpv will exit after completing the process.
+    To see a detailed list of operations, run mpv with the ``-v`` option.
+
+    The list of the file extensions to register, can be controlled with the
+    ``--video-exts``, ``--audio-exts``, ``--image-exts``, ``--playlist-exts``
+    and ``--archive-exts`` options.
+
+    By default, mpv will be registered for the current user. To register it for
+    all users, run mpv as an administrator with this option. However, this is
+    not recommended, as registering it per user is generally preferable.
+
+    You can unregister mpv from the Windows Settings or by running mpv with the
+    ``--unregister`` option.
+
+``--register-rpath=<string>``
+    (Windows only)
+
+    When registering with ``--register``, this option allows you to specify the
+    path(s) to prepend so that mpv can find the necessary DLLs. The specified
+    string will be prepended to the runtime PATH whenever mpv is executed.
+
+    This is useful for setting up paths to external libraries required by mpv
+    without adding them to the global PATH environment variable.
+
+    The format of the string follows the same structure as the PATH environment
+    variable, a semicolon-separated list of paths.
+
+    .. note::
+
+        This sets the ``App Paths`` for mpv in the Windows registry, which
+        Windows Shell uses to locate the executable and its dependencies. As a
+        result, mpv can be launched seamlessly in most cases, but not in every
+        scenario. Notably, running mpv from the command line does not use
+        `ShellExecute` under the hood, it uses `CreateProcess`, which does not
+        handle the ``App Paths`` registry key.
+
+        To work around this, you can create a small wrapper PowerShell script that
+        runs ``Start-Process <mpv path>`` and all will work as expected.
+
+``--unregister``
+    (Windows only) (available also as mpv-unregister helper)
+
+    Unregisters mpv as a media player on Windows, undoing all changes made by
+    the ``--register`` option. This will not remove mpv binary itself.
+
+    You can use any mpv binary that supports this command, to unregister, doesn't
+    have to be specifically the one that was used to register it.
+
+    Windows Settings Application entry is tied to the mpv.exe path. If you
+    remove the binary, it will not work. However, you can still unregister it
+    using this command, register it in a new location, or restore mpv to its
+    original location.
+
+    If mpv was previously registered for all users, run this command as an
+    administrator to remove it for all users.
