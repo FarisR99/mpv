@@ -187,12 +187,13 @@ static bool mp_image_alloc_planes(struct mp_image *mpi)
     return true;
 }
 
-void mp_image_setfmt(struct mp_image *mpi, int out_fmt)
+void mp_image_sethwfmt(struct mp_image *mpi, enum mp_imgfmt hw_fmt, enum mp_imgfmt sw_fmt)
 {
-    struct mp_imgfmt_desc fmt = mp_imgfmt_get_desc(out_fmt);
-    mpi->params.imgfmt = fmt.id;
+    struct mp_imgfmt_desc fmt = mp_imgfmt_get_desc(sw_fmt ? sw_fmt : hw_fmt);
+    mpi->params.imgfmt = hw_fmt;
+    mpi->params.hw_subfmt = sw_fmt;
     mpi->fmt = fmt;
-    mpi->imgfmt = fmt.id;
+    mpi->imgfmt = hw_fmt;
     mpi->num_planes = fmt.num_planes;
     mpi->params.repr.alpha = (fmt.flags & MP_IMGFLAG_ALPHA) ? PL_ALPHA_INDEPENDENT
 #if PL_API_VER >= 344
@@ -205,6 +206,11 @@ void mp_image_setfmt(struct mp_image *mpi, int out_fmt)
         .color_depth = fmt.comps[0].size - abs(fmt.comps[0].pad),
         .bit_shift = MPMAX(0, fmt.comps[0].pad),
     };
+}
+
+void mp_image_setfmt(struct mp_image *mpi, enum mp_imgfmt fmt)
+{
+    mp_image_sethwfmt(mpi, fmt, IMGFMT_NONE);
 }
 
 static void mp_image_destructor(void *ptr)
@@ -986,7 +992,8 @@ void mp_image_params_guess_csp(struct mp_image_params *params)
             }
         }
         if (params->color.transfer == PL_COLOR_TRC_UNKNOWN)
-            params->color.transfer = PL_COLOR_TRC_BT_1886;
+            params->color.transfer = params->repr.levels == PL_COLOR_LEVELS_LIMITED ?
+                                        PL_COLOR_TRC_BT_1886 : PL_COLOR_TRC_SRGB;
     } else if (forced_csp == PL_COLOR_SYSTEM_RGB) {
         params->repr.sys = PL_COLOR_SYSTEM_RGB;
         params->repr.levels = PL_COLOR_LEVELS_FULL;
@@ -1015,15 +1022,14 @@ void mp_image_params_guess_csp(struct mp_image_params *params)
         params->color.transfer = PL_COLOR_TRC_UNKNOWN;
     }
 
-    if (!params->color.hdr.max_luma) {
-        if (params->color.transfer == PL_COLOR_TRC_HLG) {
-            params->color.hdr.max_luma = 1000; // reference display
-        } else {
-            // If the signal peak is unknown, we're forced to pick the TRC's
-            // nominal range as the signal peak to prevent clipping
-            params->color.hdr.max_luma = pl_color_transfer_nominal_peak(params->color.transfer) * MP_REF_WHITE;
-        }
-    }
+    // If the signal peak is unknown, we're forced to pick the TRC's
+    // nominal range as the signal peak to prevent clipping
+    pl_color_space_nominal_luma_ex(pl_nominal_luma_params(
+        .color      = &params->color,
+        .metadata   = PL_HDR_METADATA_HDR10,
+        .scaling    = PL_HDR_NITS,
+        .out_max    = &params->color.hdr.max_luma,
+    ));
 
     if (!pl_color_space_is_hdr(&params->color)) {
         // Some clips have leftover HDR metadata after conversion to SDR, so to
@@ -1031,11 +1037,16 @@ void mp_image_params_guess_csp(struct mp_image_params *params)
         params->color.hdr = pl_hdr_metadata_empty;
     }
 
-    if (params->chroma_location == PL_CHROMA_UNKNOWN) {
-        if (params->repr.levels == PL_COLOR_LEVELS_LIMITED)
-            params->chroma_location = PL_CHROMA_LEFT;
-        if (params->repr.levels == PL_COLOR_LEVELS_FULL)
-            params->chroma_location = PL_CHROMA_CENTER;
+    if (mp_imgfmt_is_subsampled(params->hw_subfmt ? params->hw_subfmt : params->imgfmt)) {
+        if (params->chroma_location == PL_CHROMA_UNKNOWN) {
+            if (params->repr.levels == PL_COLOR_LEVELS_LIMITED)
+                params->chroma_location = PL_CHROMA_LEFT;
+            if (params->repr.levels == PL_COLOR_LEVELS_FULL)
+                params->chroma_location = PL_CHROMA_CENTER;
+        }
+    } else {
+        // Set to center for non-subsampled formats.
+        params->chroma_location = PL_CHROMA_CENTER;
     }
 
     if (params->light == MP_CSP_LIGHT_AUTO) {
@@ -1060,7 +1071,12 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *src)
 
     dst->hwctx = src->hw_frames_ctx;
 
-    mp_image_setfmt(dst, pixfmt2imgfmt(src->format));
+    if (dst->hwctx) {
+        AVHWFramesContext *fctx = (void *)dst->hwctx->data;
+        dst->params.hw_subfmt = pixfmt2imgfmt(fctx->sw_format);
+    }
+
+    mp_image_sethwfmt(dst, pixfmt2imgfmt(src->format), dst->params.hw_subfmt);
     mp_image_set_size(dst, src->width, src->height);
 
     dst->params.p_w = src->sample_aspect_ratio.num;
@@ -1101,8 +1117,16 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *src)
         dst->params.stereo3d = p->stereo3d;
         // Might be incorrect if colorspace changes.
         dst->params.light = p->light;
+#if LIBAVUTIL_VERSION_INT < AV_VERSION_INT(60, 11, 100) || PL_API_VER < 356
         dst->params.repr.alpha = p->repr.alpha;
+#endif
     }
+
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(60, 11, 100) && PL_API_VER >= 356
+    // mp_image_setfmt sets to PL_ALPHA_INDEPENDENT, if format has alpha.
+    if (dst->params.repr.alpha == PL_ALPHA_INDEPENDENT)
+        dst->params.repr.alpha = pl_alpha_from_av(src->alpha_mode);
+#endif
 
     sd = av_frame_get_side_data(src, AV_FRAME_DATA_DISPLAYMATRIX);
     if (sd) {
@@ -1178,11 +1202,6 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *src)
             .buf = sd->buf,
         };
         MP_TARRAY_APPEND(NULL, dst->ff_side_data, dst->num_ff_side_data, mpsd);
-    }
-
-    if (dst->hwctx) {
-        AVHWFramesContext *fctx = (void *)dst->hwctx->data;
-        dst->params.hw_subfmt = pixfmt2imgfmt(fctx->sw_format);
     }
 
     struct mp_image *res = mp_image_new_ref(dst);

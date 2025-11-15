@@ -73,6 +73,7 @@ struct osd_buffer {
     struct wl_list link;
     struct mp_image image;
     size_t size;
+    bool attached;
 };
 
 struct priv {
@@ -125,12 +126,7 @@ static const struct wl_buffer_listener buffer_listener = {
 static void osd_buffer_handle_release(void *data, struct wl_buffer *wl_buffer)
 {
     struct osd_buffer *osd_buf = data;
-    wl_list_remove(&osd_buf->link);
-    if (osd_buf->buffer) {
-        wl_buffer_destroy(osd_buf->buffer);
-        osd_buf->buffer = NULL;
-    }
-    talloc_free(osd_buf);
+    osd_buf->attached = false;
 }
 
 static const struct wl_buffer_listener osd_buffer_listener = {
@@ -416,7 +412,8 @@ static struct osd_buffer *osd_buffer_check(struct vo *vo)
     struct priv *p = vo->priv;
     struct osd_buffer *osd_buf;
     wl_list_for_each(osd_buf, &p->osd_buffer_list, link) {
-        return osd_buf;
+        if (!osd_buf->attached)
+            return osd_buf;
     }
     return NULL;
 }
@@ -555,6 +552,8 @@ static void resize(struct vo *vo)
     vo->target_params->rotate = (vo->params->rotate % 90) * 90;
     vo->target_params->vflip = vo->params->vflip;
     mp_mutex_unlock(&vo->params_mutex);
+
+    vo->want_redraw = true;
 }
 
 static bool draw_osd(struct vo *vo, struct mp_image *cur, double pts)
@@ -620,6 +619,9 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
 
     // Reuse the solid buffer so the osd can be visible
     if (p->force_window) {
+        wp_viewport_set_source(wl->video_viewport, wl_fixed_from_int(-1),
+                               wl_fixed_from_int(-1), wl_fixed_from_int(-1),
+                               wl_fixed_from_int(-1));
         wl_surface_attach(wl->video_surface, p->solid_buffer, 0, 0);
         wl_surface_damage_buffer(wl->video_surface, 0, 0, 1, 1);
     }
@@ -644,6 +646,7 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
             wl_surface_attach(wl->osd_surface, osd_buf->buffer, 0, 0);
             wl_surface_damage_buffer(wl->osd_surface, 0, 0, osd_buf->image.w,
                                      osd_buf->image.h);
+            osd_buf->attached = true;
             p->osd_surface_is_mapped = true;
         } else if (!p->osd_surface_has_contents && p->osd_surface_is_mapped) {
             wl_surface_attach(wl->osd_surface, NULL, 0, 0);

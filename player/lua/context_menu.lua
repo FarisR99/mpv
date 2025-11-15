@@ -19,7 +19,7 @@ local assdraw = require "mp.assdraw"
 
 local options = {
     font_size = 14,
-    gap = 3,
+    gap = 0.2,
     padding_x = 8,
     padding_y = 4,
     menu_outline_size = 0,
@@ -33,7 +33,7 @@ local options = {
     seconds_to_close_submenus = 0.2,
 }
 
-local open_menus
+local open_menus = {}
 local items
 local focused_level = 1
 local focused_index
@@ -166,7 +166,7 @@ local function calculate_width(menu_items, osd_w, osd_h, checkbox)
 end
 
 local function get_line_height()
-    return options.font_size + options.gap
+    return options.font_size * (1 + options.gap)
 end
 
 local function calculate_height(menu_items)
@@ -181,15 +181,15 @@ local function calculate_height(menu_items)
 end
 
 local function add_menu(menu_items, x, y)
-    if not menu_items[1] then
-        return
-    end
-
     local visible_items = {}
     for _, item in ipairs(menu_items) do
         if not has_state(item, "hidden") then
             visible_items[#visible_items + 1] = item
         end
+    end
+
+    if not visible_items[1] then
+        return
     end
 
     local checkbox = has_checkbox(visible_items)
@@ -387,7 +387,8 @@ local function render()
 
     local background_style = "{\\1c&H" .. back_color .. "&" ..
                        "&\\bord" .. options.menu_outline_size .. "\\3c&H" ..
-                       color_option_to_ass(options.menu_outline_color) .. "&}"
+                       color_option_to_ass(options.menu_outline_color) ..
+                       "\\blur0&}"
     if border_style == "background-box" then
         background_style = background_style .. "{\\4a&Hff&}"
     end
@@ -571,6 +572,7 @@ local function activate_shortcut(info)
 
    if info.key_text == " " then
        activate_focused_item(true)
+       return
    end
 
    for i, item in ipairs(items[focused_level]) do
@@ -627,6 +629,10 @@ mp.register_script_message("open", function ()
 
     add_menu(mp.get_property_native("menu-data"), x, y)
 
+    if not open_menus[1] then
+        return
+    end
+
     render()
 
     for key, fn in pairs(bindings) do
@@ -637,6 +643,10 @@ mp.register_script_message("open", function ()
     end
 end)
 
-mp.register_script_message("select", activate_focused_item)
+mp.register_script_message("select", function ()
+    if open_menus[1] then
+        activate_focused_item()
+    end
+end)
 
 require "mp.options".read_options(options)

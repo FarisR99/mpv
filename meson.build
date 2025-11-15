@@ -326,9 +326,6 @@ mswin_flags = ['-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00', '-DUNICODE',
                '-D_CRT_DECLARE_NONSTDC_NAMES', '-D_CRT_NONSTDC_NO_WARNINGS',
                '-D_CRT_SECURE_NO_WARNINGS', '-DWINRT_NO_SOURCE_LOCATION']
 
-# https://developercommunity.visualstudio.com/t/NAN-is-no-longer-compile-time-constant-i/10688907
-mswin_flags += '-D_UCRT_NOISY_NAN'
-
 if host_machine.system() == 'windows'
     flags += [mswin_flags]
     flags_c += ['-U__STRICT_ANSI__']
@@ -444,6 +441,12 @@ endif
 if posix and not darwin
     path_source = files('osdep/path-unix.c')
     timer_source = files('osdep/timer-linux.c')
+endif
+
+if host_machine.system() == 'linux'
+    sources += files('osdep/als-linux.c')
+else
+    sources += files('osdep/als-voctrl.c')
 endif
 
 features += {'ppoll': cc.has_function('ppoll', args: '-D_GNU_SOURCE',
@@ -645,6 +648,7 @@ iconv = dependency('iconv', required: get_option('iconv'))
 features += {'iconv': iconv.found()}
 if features['iconv']
     dependencies += iconv
+    add_project_arguments('-DWINICONV_CONST=', language: ['c', 'objc'])
 endif
 
 javascript = dependency('mujs', version: '>= 1.0.0', required: get_option('javascript'))
@@ -736,19 +740,16 @@ if features['rubberband']
     sources += files('audio/filter/af_rubberband.c')
 endif
 
-sdl2 = dependency('sdl2', required: get_option('sdl2'))
-features += {'sdl2': sdl2.found()}
-if features['sdl2']
-    dependencies += sdl2
-endif
+sdl2 = dependency('sdl2', required: false)
 
 sdl2_gamepad = get_option('sdl2-gamepad').require(
-    features['sdl2'],
+    sdl2.found(),
     error_message: 'sdl2 was not found!',
 )
 features += {'sdl2-gamepad': sdl2_gamepad.allowed()}
 if features['sdl2-gamepad']
     sources += files('input/sdl_gamepad.c')
+    dependencies += sdl2
 endif
 
 uchardet_opt = get_option('uchardet').require(
@@ -768,6 +769,14 @@ features += {'vapoursynth': vapoursynth.found() and vapoursynth_script.found()}
 if features['vapoursynth']
     dependencies += [vapoursynth, vapoursynth_script]
     sources += files('video/filter/vf_vapoursynth.c')
+endif
+
+xfixes = dependency('xfixes', version: '>= 1.0.0', required: get_option('x11-clipboard'))
+libx11 = dependency('x11', version: '>= 1.0.0', required: get_option('x11-clipboard'))
+features += {'x11-clipboard': xfixes.found() and libx11.found()}
+if features['x11-clipboard']
+    dependencies += [xfixes, libx11]
+    sources += files('player/clipboard/clipboard-x11.c')
 endif
 
 zimg = dependency('zimg', version: '>= 2.9', required: get_option('zimg'))
@@ -884,12 +893,13 @@ if features['pulse']
 endif
 
 sdl2_audio = get_option('sdl2-audio').require(
-    features['sdl2'],
+    sdl2.found(),
     error_message: 'sdl2 was not found!',
 )
 features += {'sdl2-audio': sdl2_audio.allowed()}
 if features['sdl2-audio']
     sources += files('audio/out/ao_sdl.c')
+    dependencies += sdl2
 endif
 
 sndio = dependency('sndio', required: get_option('sndio'))
@@ -964,12 +974,13 @@ if features['jpeg']
 endif
 
 sdl2_video = get_option('sdl2-video').require(
-    features['sdl2'],
+    sdl2.found(),
     error_message: 'sdl2 was not found!',
 )
 features += {'sdl2-video': sdl2_video.allowed()}
 if features['sdl2-video']
     sources += files('video/out/vo_sdl.c')
+    dependencies += sdl2
 endif
 
 shaderc = dependency('shaderc', required:
@@ -1846,7 +1857,8 @@ if get_option('cplayer')
         osxbundle = find_program(join_paths(tools_directory, 'osxbundle.py'), required: true)
         custom_target('macos-bundle',
             output: 'mpv.app',
-            command: [osxbundle, mpv.full_path(), '@SOURCE_ROOT@'],
+            depends: version_h,
+            command: [osxbundle, mpv, '@SOURCE_ROOT@', '-c', get_option('macos-bundle-category')],
         )
     endif
 
@@ -1879,7 +1891,12 @@ if get_option('fuzzers')
     subdir('fuzzers')
 endif
 
+if features['sdl2-audio'] or features['sdl2-gamepad'] or features['sdl2-video']
+    warning('You are building with optional SDL2 support. If you encounter build issues, try disabling it.')
+endif
+
 summary({'d3d11': features['d3d11'],
+         'drm': features['drm'],
          'javascript': features['javascript'],
          'libmpv': get_option('libmpv'),
          'lua': features['lua'],

@@ -168,6 +168,7 @@ struct gl_next_opts {
     int sub_hdr_peak;
     int image_subs_hdr_peak;
     int border_background;
+    float background_blur_radius;
     float corner_rounding;
     bool inter_preserve;
     struct user_lut lut;
@@ -175,6 +176,7 @@ struct gl_next_opts {
     struct user_lut target_lut;
     int target_hint;
     int target_hint_mode;
+    bool target_hint_strict;
     char **raw_opts;
 };
 
@@ -197,7 +199,13 @@ const struct m_sub_options gl_next_conf = {
         {"border-background", OPT_CHOICE(border_background,
             {"none",  BACKGROUND_NONE},
             {"color", BACKGROUND_COLOR},
-            {"tiles", BACKGROUND_TILES})},
+            {"tiles", BACKGROUND_TILES}
+#if PL_API_VER < 355
+            )},
+#else
+            ,{"blur", BACKGROUND_BLUR})},
+        {"background-blur-radius", OPT_FLOAT(background_blur_radius)},
+#endif
         {"corner-rounding", OPT_FLOAT(corner_rounding), M_RANGE(0, 1)},
         {"interpolation-preserve", OPT_BOOL(inter_preserve)},
         {"lut", OPT_STRING(lut.opt), .flags = M_OPT_FILE},
@@ -207,16 +215,19 @@ const struct m_sub_options gl_next_conf = {
         {"target-lut", OPT_STRING(target_lut.opt), .flags = M_OPT_FILE},
         {"target-colorspace-hint", OPT_CHOICE(target_hint, {"auto", -1}, {"no", 0}, {"yes", 1})},
         {"target-colorspace-hint-mode", OPT_CHOICE(target_hint_mode, {"target", 0}, {"source", 1}, {"source-dynamic", 2})},
+        {"target-colorspace-hint-strict", OPT_BOOL(target_hint_strict)},
         // No `target-lut-type` because we don't support non-RGB targets
         {"libplacebo-opts", OPT_KEYVALUELIST(raw_opts)},
         {0},
     },
     .defaults = &(struct gl_next_opts) {
         .border_background = BACKGROUND_COLOR,
+        .background_blur_radius = 16.0f,
         .inter_preserve = true,
         .sub_hdr_peak = PL_COLOR_SDR_WHITE,
         .image_subs_hdr_peak = PL_COLOR_SDR_WHITE,
         .target_hint = -1,
+        .target_hint_strict = true,
     },
     .size = sizeof(struct gl_next_opts),
     .change_flags = UPDATE_VIDEO,
@@ -660,6 +671,17 @@ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src
         .user_data = mpi,
     };
 
+    const struct gl_video_opts *opts = p->opts_cache->opts;
+    if (opts->hdr_reference_white && !pl_color_transfer_is_hdr(frame->color.transfer))
+        frame->color.hdr.max_luma = opts->hdr_reference_white;
+
+
+    if (opts->treat_srgb_as_power22 & 1 && frame->color.transfer == PL_COLOR_TRC_SRGB) {
+        // The sRGB EOTF is a pure gamma 2.2 function. See reference display in
+        // IEC 61966-2-1-1999. Linearize sRGB to display light.
+        frame->color.transfer = PL_COLOR_TRC_GAMMA22;
+    }
+
     if (fp->hwdec) {
 
         struct mp_imgfmt_desc desc = mp_imgfmt_get_desc(par.imgfmt);
@@ -860,6 +882,10 @@ static void apply_target_options(struct priv *p, struct pl_frame *target,
         target->color.transfer = opts->target_trc;
     if (opts->target_peak && (!target->color.hdr.max_luma || !hint))
         target->color.hdr.max_luma = opts->target_peak;
+    if (opts->hdr_reference_white && (!target->color.hdr.max_luma || !hint) &&
+        !pl_color_transfer_is_hdr(target->color.transfer)) {
+        target->color.hdr.max_luma = opts->hdr_reference_white;
+    }
     if ((!target->color.hdr.min_luma || !hint))
         apply_target_contrast(p, &target->color, min_luma);
     if (opts->target_gamut) {
@@ -1068,12 +1094,14 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
     if (target_csp.primaries == PL_COLOR_PRIM_UNKNOWN)
         target_csp.primaries = get_best_prim_container(&target_csp.hdr.prim);
     if (!pl_color_transfer_is_hdr(target_csp.transfer)) {
+        // limit min_luma to 1000:1 contrast ratio in SDR mode
+        if (target_csp.hdr.min_luma > PL_COLOR_SDR_WHITE / PL_COLOR_SDR_CONTRAST)
+            target_csp.hdr.min_luma = 0;
         // Don't use reported display peak in SDR mode. Mostly because libplacebo
         // forcefully switches to PQ if hinting hdr metadata, ignoring the transfer
         // set in the hint. But also because setting target peak in SDR mode is
         // very specific usecase, needs proper calibration, users can set it manually.
         target_csp.hdr.max_luma = 0;
-        target_csp.hdr.min_luma = 0;
         target_csp.hdr.max_cll = 0;
         target_csp.hdr.max_fall = 0;
     }
@@ -1086,7 +1114,9 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
                        (p->next_opts->target_hint == -1 &&
                         target_csp.transfer != PL_COLOR_TRC_UNKNOWN);
     // Assume HDR is supported, if target_csp() is not available
-    if (target_csp.transfer == PL_COLOR_TRC_UNKNOWN) {
+    // TODO: Remove this fallback when all backends support target_csp()
+    bool target_unknown = target_csp.transfer == PL_COLOR_TRC_UNKNOWN;
+    if (target_unknown) {
         target_csp = (struct pl_color_space){
             .transfer = opts->target_trc ? opts->target_trc : pl_color_space_hdr10.transfer };
     }
@@ -1102,6 +1132,16 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
             hint = *target;
             if (pl_color_transfer_is_hdr(hint.transfer) && !pl_primaries_valid(&hint.hdr.prim))
                 pl_color_space_merge(&hint, source);
+            if (target_unknown && !opts->target_trc && !pl_color_transfer_is_hdr(source->transfer))
+                hint = *source;
+            // Vulkan doesn't have support for gamma 2.2 transfer function,
+            // so even though requested preferred color space is gamma 2.2, we
+            // fallback to sRGB. sRGB itself is ambiguous, but at least we have
+            // options to control the behavior.
+            // TODO: Revise this after fix for linear transfers lands in libplacebo.
+            // <https://code.videolan.org/videolan/libplacebo/-/merge_requests/759>
+            if (hint.transfer == PL_COLOR_TRC_GAMMA22)
+                hint.transfer = PL_COLOR_TRC_SRGB;
             // Restore target luminance if it was present, note that we check
             // max_luma only, this make sure that max_cll/max_fall is not take
             // from source.
@@ -1146,10 +1186,19 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
             pass_colorspace = true;
         if (opts->target_prim)
             hint.primaries = opts->target_prim;
+        if (opts->target_gamut) {
+            // Ensure resulting gamut still fits inside container
+            const struct pl_raw_primaries *gamut, *container;
+            gamut = pl_raw_primaries_get(opts->target_gamut);
+            container = pl_raw_primaries_get(hint.primaries);
+            hint.hdr.prim = pl_primaries_clip(gamut, container);
+        }
         if (opts->target_trc)
             hint.transfer = opts->target_trc;
         if (opts->target_peak)
             hint.hdr.max_luma = opts->target_peak;
+        if (opts->hdr_reference_white && !pl_color_transfer_is_hdr(hint.transfer))
+            hint.hdr.max_luma = opts->hdr_reference_white;
         // Always set maxCLL, display uses this metadata and we shouldn't let it
         // fallback to default value.
         if (!hint.hdr.max_cll)
@@ -1213,7 +1262,47 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
     // Calculate target
     struct pl_frame target;
     pl_frame_from_swapchain(&target, &swframe);
-    apply_target_options(p, &target, hint.hdr.min_luma, target_hint && !pass_colorspace);
+    bool strict_sw_params = target_hint && !pass_colorspace && p->next_opts->target_hint_strict;
+    apply_target_options(p, &target, hint.hdr.min_luma, strict_sw_params);
+    if (target.color.transfer == PL_COLOR_TRC_SRGB && frame->current &&
+        ((opts->sdr_adjust_gamma == 0 && opts->target_trc == PL_COLOR_TRC_UNKNOWN) ||
+         opts->sdr_adjust_gamma == -1))
+    {
+        switch (frame->current->params.color.transfer) {
+        case PL_COLOR_TRC_BT_1886:
+        case PL_COLOR_TRC_GAMMA22:
+        case PL_COLOR_TRC_SRGB:
+            target.color.transfer = frame->current->params.color.transfer;
+        }
+    }
+    if (target.color.transfer == PL_COLOR_TRC_SRGB) {
+        // sRGB reference display is pure 2.2 power function, see IEC 61966-2-1-1999.
+        if (opts->treat_srgb_as_power22 & 2)
+            target.color.transfer = PL_COLOR_TRC_GAMMA22;
+
+        // TODO: Vulkan on Wayland currently interprets VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+        // in ambiguous way, depending if compositor advertises sRGB support.
+        // There is currently no clear path forward to resolve this ambiguity.
+        // Depending how it's resolved in Wayland Protocol, Mesa, things will
+        // change.
+        // See: <https://gitlab.freedesktop.org/wayland/wayland-protocols/-/merge_requests/456>
+#ifdef _WIN32
+        // Windows uses the sRGB piecewise function. Send piecewise sRGB to
+        // Windows in HDR mode so that it can be converted to PQ, the same way
+        // as mpv does internally. Note that in SDR mode, even with ACM enabled,
+        // Windows assumes the display is sRGB. It doesn't perform gamma
+        // conversion, or any conversions would roundtrip back to sRGB.
+        // In which case the EOTF depends on the display.
+        // Ideally, compositors would agree on how to handle sRGB, but I’ll
+        // leave that part of the story for the reader to explore.
+        // Note: Older Windows versions, without ACM, were not able to convert
+        // sRGB to PQ output. We are not concerned about this case, as it would
+        // look wrong anyway.
+        bool target_pq = !target_unknown && target_csp.transfer == PL_COLOR_TRC_PQ;
+        if (opts->treat_srgb_as_power22 & 4 && target_pq)
+            target.color.transfer = PL_COLOR_TRC_SRGB;
+#endif
+    }
     update_overlays(vo, p->osd_res,
                     (frame->current && opts->blend_subs) ? OSD_DRAW_OSD_ONLY : 0,
                     PL_OVERLAY_COORDS_DST_FRAME, &p->osd_state, &target, frame->current);
@@ -1589,6 +1678,17 @@ static void video_screenshot(struct vo *vo, struct voctrl_screenshot *args)
         target.color = image.color;
     } else {
         target.color = pl_color_space_srgb;
+    }
+
+    // sRGB reference display is pure 2.2 power function, see IEC 61966-2-1-1999.
+    // Round-trip back to sRGB if the source is also sRGB. In other cases, we
+    // use piecewise sRGB transfer function, as this is likely the be expected
+    // for file encoding.
+    if (opts->treat_srgb_as_power22 & 1 &&
+        target.color.transfer == PL_COLOR_TRC_SRGB &&
+        mpi->params.color.transfer == PL_COLOR_TRC_SRGB)
+    {
+        target.color.transfer = PL_COLOR_TRC_GAMMA22;
     }
 
     apply_crop(&image, src, mpi->params.w, mpi->params.h);
@@ -2387,13 +2487,19 @@ static void update_render_options(struct vo *vo)
     pars->params.disable_fbos = opts->dumb_mode == 1;
 
 #if PL_API_VER >= 346
-    int map_background_types[3] = {
-        PL_CLEAR_SKIP,  // BACKGROUND_NONE
-        PL_CLEAR_COLOR, // BACKGROUND_COLOR
-        PL_CLEAR_TILES, // BACKGROUND_TILES
+    static const int map_background_types[] = {
+        [BACKGROUND_NONE]  = PL_CLEAR_SKIP,
+        [BACKGROUND_COLOR] = PL_CLEAR_COLOR,
+        [BACKGROUND_TILES] = PL_CLEAR_TILES,
+#if PL_API_VER >= 355
+        [BACKGROUND_BLUR]  = PL_CLEAR_BLUR,
+#endif
     };
     pars->params.background = map_background_types[opts->background];
     pars->params.border = map_background_types[p->next_opts->border_background];
+#if PL_API_VER >= 355
+    pars->params.blur_radius = p->next_opts->background_blur_radius;
+#endif
 #else
     pars->params.blend_against_tiles = opts->background == BACKGROUND_TILES;
 #endif

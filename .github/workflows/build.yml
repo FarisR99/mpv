@@ -258,7 +258,6 @@ jobs:
       - name: Run meson tests
         id: tests
         run: |
-          export LSAN_OPTIONS="suppressions=${GITHUB_WORKSPACE}/.lsan_suppressions"
           meson test -C build
 
       - name: Print meson test log
@@ -281,7 +280,6 @@ jobs:
         run: |
           meson setup build \
             --werror        \
-            -Dc_args="-Wno-error=deprecated -Wno-error=deprecated-declarations" \
             -Dfuzzers=true -Dlibmpv=true -Dcplayer=false
           meson compile -C build fuzzers
 

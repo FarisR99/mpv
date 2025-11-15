@@ -303,6 +303,9 @@ struct vo_wayland_preferred_description_info {
     struct vo_wayland_state *wl;
     bool is_parametric;
     struct pl_color_space csp;
+    float min_luma;
+    float max_luma;
+    float ref_luma;
     void *icc_file;
     uint32_t icc_size;
 };
@@ -1699,8 +1702,8 @@ static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
     if (outputs == 1)
         update_output_geometry(wl, old_geometry, old_output_geometry);
 
-    MP_VERBOSE(wl, "Surface entered output %s %s (0x%x), scale = %f, refresh rate = %f Hz\n",
-               wl->current_output->make, wl->current_output->model,
+    MP_VERBOSE(wl, "Surface entered output %s %s (%s) (0x%x), scale = %f, refresh rate = %f Hz\n",
+               wl->current_output->make, wl->current_output->model, wl->current_output->name,
                wl->current_output->id, wl->scaling_factor, wl->current_output->refresh_rate);
 
     wl->pending_vo_events |= VO_EVENT_WIN_STATE;
@@ -1997,6 +2000,28 @@ static const struct wp_fractional_scale_v1_listener fractional_scale_listener = 
     preferred_scale,
 };
 
+static void log_color_space(struct mp_log *log, struct vo_wayland_preferred_description_info *wd)
+{
+    const struct pl_color_space *csp = &wd->csp;
+    mp_verbose(log,
+        "transfer: %s, primaries: %s\n"
+        "transfer: min_luma=%f, max_luma=%f, ref_luma=%f\n"
+        "target: min_luma=%f, max_luma=%f, max_cll=%f, max_fall=%f\n"
+        "        raw prims: red.x=%f,   red.y=%f,\n"
+        "                   green.x=%f, green.y=%f,\n"
+        "                   blue.x=%f,  blue.y=%f,\n"
+        "                   white.x=%f, white.y=%f\n",
+        m_opt_choice_str(pl_csp_trc_names,   csp->transfer),
+        m_opt_choice_str(pl_csp_prim_names, csp->primaries),
+        wd->min_luma, wd->max_luma, wd->ref_luma,
+        csp->hdr.min_luma,  csp->hdr.max_luma,
+        csp->hdr.max_cll, csp->hdr.max_fall,
+        csp->hdr.prim.red.x,   csp->hdr.prim.red.y,
+        csp->hdr.prim.green.x, csp->hdr.prim.green.y,
+        csp->hdr.prim.blue.x,  csp->hdr.prim.blue.y,
+        csp->hdr.prim.white.x, csp->hdr.prim.white.y);
+}
+
 #if HAVE_WAYLAND_PROTOCOLS_1_41
 static void supported_intent(void *data, struct wp_color_manager_v1 *color_manager,
                              uint32_t render_intent)
@@ -2108,6 +2133,7 @@ static void image_description_failed(void *data, struct wp_image_description_v1 
 {
     struct vo_wayland_state *wl = data;
     MP_VERBOSE(wl, "Image description failed: %d, %s\n", cause, msg);
+    wp_color_management_surface_v1_unset_image_description(wl->color_surface);
     wp_image_description_v1_destroy(image_description);
 }
 
@@ -2116,7 +2142,7 @@ static void image_description_ready(void *data, struct wp_image_description_v1 *
 {
     struct vo_wayland_state *wl = data;
     wp_color_management_surface_v1_set_image_description(wl->color_surface, image_description, 0);
-    MP_VERBOSE(wl, "Image description set on color surface.\n");
+    MP_TRACE(wl, "Image description set on color surface.\n");
     wp_image_description_v1_destroy(image_description);
 }
 
@@ -2132,6 +2158,12 @@ static void info_done(void *data, struct wp_image_description_info_v1 *image_des
     wp_image_description_info_v1_destroy(image_description_info);
     if (wd->is_parametric) {
         wl->preferred_csp = wd->csp;
+        MP_VERBOSE(wl, "Preferred surface feedback received:\n");
+        log_color_space(wl->log, wd);
+        if (wd->csp.hdr.max_luma > wd->ref_luma) {
+            MP_VERBOSE(wl, "Setting preferred transfer to PQ for HDR output.\n");
+            wl->preferred_csp.transfer = PL_COLOR_TRC_PQ;
+        }
     } else {
         if (wd->icc_file) {
             if (wl->icc_size) {
@@ -2195,6 +2227,12 @@ static void info_tf_named(void *data, struct wp_image_description_info_v1 *image
 static void info_luminances(void *data, struct wp_image_description_info_v1 *image_description_info,
                             uint32_t min_lum, uint32_t max_lum, uint32_t reference_lum)
 {
+    struct vo_wayland_preferred_description_info *wd = data;
+    if (!wd->is_parametric)
+        return;
+    wd->min_luma = min_lum / (float)WAYLAND_MIN_LUM_FACTOR;
+    wd->max_luma = max_lum;
+    wd->ref_luma = reference_lum;
 }
 
 static void info_target_primaries(void *data, struct wp_image_description_info_v1 *image_description_info,
@@ -3297,8 +3335,8 @@ static void remove_output(struct vo_wayland_output *out)
     if (!out)
         return;
 
-    MP_VERBOSE(out->wl, "Deregistering output %s %s (0x%x)\n", out->make,
-               out->model, out->id);
+    MP_VERBOSE(out->wl, "Deregistering output %s %s (%s) (0x%x)\n", out->make,
+               out->model, out->name, out->id);
     wl_list_remove(&out->link);
     wl_output_destroy(out->output);
     talloc_free(out->make);
@@ -3450,8 +3488,6 @@ static void set_color_management(struct vo_wayland_state *wl)
     if (!wl->color_surface)
         return;
 
-    wp_color_management_surface_v1_unset_image_description(wl->color_surface);
-
     struct pl_color_space color = wl->target_params.color;
     int primaries = wl->primaries_map[color.primaries];
     int transfer = wl->transfer_map[color.transfer];
@@ -3459,22 +3495,37 @@ static void set_color_management(struct vo_wayland_state *wl)
         MP_VERBOSE(wl, "Compositor does not support color primary: %s\n", m_opt_choice_str(pl_csp_prim_names, color.primaries));
     if (!transfer)
         MP_VERBOSE(wl, "Compositor does not support transfer function: %s\n", m_opt_choice_str(pl_csp_trc_names, color.transfer));
-    if (!primaries || !transfer)
+    if (!primaries || !transfer) {
+        wp_color_management_surface_v1_unset_image_description(wl->color_surface);
         return;
+    }
+
+    MP_VERBOSE(wl, "Generating image creator params:\n");
+    MP_VERBOSE(wl, "primaries: %s, transfer: %s\n",
+               m_opt_choice_str(pl_csp_prim_names, color.primaries),
+               m_opt_choice_str(pl_csp_trc_names, color.transfer));
 
     struct wp_image_description_creator_params_v1 *image_creator_params =
         wp_color_manager_v1_create_parametric_creator(wl->color_manager);
     wp_image_description_creator_params_v1_set_primaries_named(image_creator_params, primaries);
     wp_image_description_creator_params_v1_set_tf_named(image_creator_params, transfer);
 
-    pl_color_space_infer(&wl->target_params.color);
     struct pl_hdr_metadata hdr = wl->target_params.color.hdr;
     bool is_hdr = pl_color_transfer_is_hdr(color.transfer);
     bool use_metadata = hdr_metadata_valid(&hdr);
     if (!use_metadata)
         MP_VERBOSE(wl, "supplied HDR metadata does not conform to the wayland color management protocol. It will not be used.\n");
-    if (wl->supports_display_primaries && is_hdr && use_metadata) {
-        wp_image_description_creator_params_v1_set_mastering_display_primaries(image_creator_params,
+    if (is_hdr && use_metadata) {
+        if (wl->supports_display_primaries) {
+            MP_VERBOSE(wl,"raw prims: red.x=%f, red.y=%f,\n"
+                          "           green.x=%f, green.y=%f,\n"
+                          "           blue.x=%f,  blue.y=%f,\n"
+                          "           white.x=%f, white.y=%f\n",
+                            hdr.prim.red.x, hdr.prim.red.y,
+                            hdr.prim.green.x, hdr.prim.green.y,
+                            hdr.prim.blue.x, hdr.prim.blue.y,
+                            hdr.prim.white.x, hdr.prim.white.y);
+            wp_image_description_creator_params_v1_set_mastering_display_primaries(image_creator_params,
                 lrintf(hdr.prim.red.x * WAYLAND_COLOR_FACTOR),
                 lrintf(hdr.prim.red.y * WAYLAND_COLOR_FACTOR),
                 lrintf(hdr.prim.green.x * WAYLAND_COLOR_FACTOR),
@@ -3484,8 +3535,11 @@ static void set_color_management(struct vo_wayland_state *wl)
                 lrintf(hdr.prim.white.x * WAYLAND_COLOR_FACTOR),
                 lrintf(hdr.prim.white.y * WAYLAND_COLOR_FACTOR));
 
-        wp_image_description_creator_params_v1_set_mastering_luminance(image_creator_params,
-            lrintf(hdr.min_luma * WAYLAND_MIN_LUM_FACTOR), lrintf(hdr.max_luma));
+            MP_VERBOSE(wl, "min_luma: %f, max_luma: %f\n", hdr.min_luma, hdr.max_luma);
+            wp_image_description_creator_params_v1_set_mastering_luminance(image_creator_params,
+                lrintf(hdr.min_luma * WAYLAND_MIN_LUM_FACTOR), lrintf(hdr.max_luma));
+        }
+        MP_VERBOSE(wl, "max_cll: %f, max_fall: %f\n", hdr.max_cll, hdr.max_fall);
         wp_image_description_creator_params_v1_set_max_cll(image_creator_params, lrintf(hdr.max_cll));
         wp_image_description_creator_params_v1_set_max_fall(image_creator_params, lrintf(hdr.max_fall));
     }
@@ -3512,15 +3566,26 @@ static void set_color_representation(struct vo_wayland_state *wl)
     int range = repr.levels == PL_COLOR_LEVELS_FULL ? wl->range_map[repr.sys] :
                                 wl->range_map[repr.sys + PL_COLOR_SYSTEM_COUNT];
     int chroma_location = map_supported_chroma_location(wl->target_params.chroma_location);
+    enum mp_imgfmt imgfmt = wl->target_params.hw_subfmt ? wl->target_params.hw_subfmt : wl->target_params.imgfmt;
+    bool is_420_subsampled = mp_imgfmt_is_420_subsampled(imgfmt);
 
-    if (coefficients && range)
+    MP_VERBOSE(wl, "Setting color representation:\n");
+    if (coefficients && range) {
+        MP_VERBOSE(wl, "  Coefficients: %s, Range: %s\n",
+                   m_opt_choice_str(pl_csp_names, repr.sys),
+                   m_opt_choice_str(pl_csp_levels_names, repr.levels));
         wp_color_representation_surface_v1_set_coefficients_and_range(wl->color_representation_surface, coefficients, range);
+    }
 
-    if (alpha)
+    if (alpha) {
+        MP_VERBOSE(wl, "  Alpha mode: %s\n", m_opt_choice_str(pl_alpha_names, repr.alpha));
         wp_color_representation_surface_v1_set_alpha_mode(wl->color_representation_surface, alpha);
+    }
 
-    if (chroma_location)
+    if (is_420_subsampled && chroma_location) {
+        MP_VERBOSE(wl, "  Chroma location: %s\n", m_opt_choice_str(pl_chroma_names, wl->target_params.chroma_location));
         wp_color_representation_surface_v1_set_chroma_location(wl->color_representation_surface, chroma_location);
+    }
 #endif
 }
 
@@ -4135,6 +4200,7 @@ void vo_wayland_handle_color(struct vo_wayland_state *wl)
     if (!wl->vo->target_params)
         return;
     struct mp_image_params target_params = vo_get_target_params(wl->vo);
+    pl_color_space_infer(&target_params.color);
     if (pl_color_space_equal(&target_params.color, &wl->target_params.color) &&
         pl_color_repr_equal(&target_params.repr, &wl->target_params.repr) &&
         target_params.chroma_location == wl->target_params.chroma_location)
@@ -4309,7 +4375,7 @@ bool vo_wayland_init(struct vo *vo)
         wl->fback_pool->len = VO_MAX_SWAPCHAIN_DEPTH;
         wl->fback_pool->fback = talloc_zero_array(wl->fback_pool, struct wp_presentation_feedback *,
                                                   wl->fback_pool->len);
-        wl->present = mp_present_initialize(wl, wl->vo, VO_MAX_SWAPCHAIN_DEPTH);
+        wl->present = mp_present_initialize(wl, wl->opts, VO_MAX_SWAPCHAIN_DEPTH);
     } else {
         MP_VERBOSE(wl, "Compositor doesn't support the %s protocol!\n",
                    wp_presentation_interface.name);
@@ -4474,7 +4540,8 @@ void vo_wayland_uninit(struct vo *vo)
     mp_input_put_key(wl->vo->input_ctx, MP_INPUT_RELEASE_ALL);
 
     // Ensure that any in-flight vo_wayland_preferred_description_info get deallocated.
-    wl_display_roundtrip(wl->display);
+    if (wl->display)
+        wl_display_roundtrip(wl->display);
 
     if (wl->compositor)
         wl_compositor_destroy(wl->compositor);

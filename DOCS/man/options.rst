@@ -1834,7 +1834,7 @@ Video
     You can get the list of allowed codecs with ``mpv --vd=help``. Remove the
     prefix, e.g. instead of ``lavc:h264`` use ``h264``.
 
-    By default, this is set to ``h264,vc1,hevc,vp8,vp9,av1,prores,ffv1``. Note that
+    By default, this is set to ``h264,vc1,hevc,vp8,vp9,av1,prores,prores_raw,ffv1``. Note that
     the hardware acceleration special codecs like ``h264_vdpau`` are not
     relevant anymore, and in fact have been removed from FFmpeg in this form.
 
@@ -1998,9 +1998,7 @@ Video
     missed vsyncs, but increases visible latency. This option only mandates an
     upper limit, the implementation can use a lower latency than requested
     internally. A setting of 1 means that the VO will wait for every frame to
-    become visible before starting to render the next frame. (Default: 3)
-    If ``--video-sync=display-*`` is used, this option is ignored and the depth
-    is always 1.
+    become visible before starting to render the next frame. (Default: 2)
 
 Audio
 -----
@@ -2887,8 +2885,19 @@ Subtitles
 
 ``--sub-fix-timing=<yes|no>``
     Adjust subtitle timing is to remove minor gaps or overlaps between
-    subtitles (if the difference is smaller than 210 ms, the gap or overlap
-    is removed).
+    subtitles.
+
+    See also: ``--sub-fix-timing-threshold`` and ``--sub-fix-timing-keep``.
+
+``--sub-fix-timing-threshold=<amount>``
+    Set the threshold in milliseconds for fixing subtitle timing (default: 210).
+    If the gap between two subtitle events is smaller than this, the gap is
+    removed.
+
+``--sub-fix-timing-keep=<amount>``
+    Set the minimum duration in milliseconds for subtitle events to be
+    considered for timing fixes (default: 400). If a subtitle event has a
+    duration smaller than this, its timing is not changed.
 
 ``--sub-forced-events-only=<yes|no>``
     Enabling this displays only forced events within subtitle streams. Only
@@ -7097,6 +7106,7 @@ them.
         mode adapts the source content to the target display before output.
         Note: HDR primaries are not overridden by the ``--target-prim`` option
         this only affects the enclosing container for the colorspace.
+        ``--target-gamut`` can be used to limit the output gamut if needed.
 
     source
         Uses the source content's metadata. This is the traditional
@@ -7175,6 +7185,14 @@ them.
 
         Your mileage may vary, this highly depends on the target display, there
         is no single answer, but try experimenting, you may be surprised.
+
+``--target-colorspace-hint-strict``
+    When enabled (default), the configured swapchain colorspace (with the hint)
+    will be respected. In this mode, the ``--target-*`` options act only as a
+    hint, while the negotiated swapchain format is used for rendering output.
+    This ensures correct results, since downstream processing depends on the
+    signaled colorspace. When disabled, the swapchain colorspace will be
+    overridden to match the ``--target-*`` options. (Only for ``--vo=gpu-next``)
 
 ``--target-prim=<value>``
     Specifies the primaries of the display. Video colors will be adapted to
@@ -7311,11 +7329,70 @@ them.
     the gamut you want to limit colors to. Takes the same values as
     ``--target-prim``. (Only for ``--vo=gpu-next``)
 
+    .. note::
+
+        If the selected gamut is wider, it will be limited to ``--target-prim``.
+        Additionally, if ``--target-colorspace-hint`` is specified, the signaled
+        gamut will be limited to the supported gamut of the swapchain. Which may
+        differ from the requested ``--target-prim``.
+
 ``--target-lut=<file>``
     Specifies a custom LUT file (in Adobe .cube format) to apply to the colors
     before display on-screen. This LUT is fed values in normalized RGB, after
     encoding into the target colorspace, so after the application of
     ``--target-trc``. (Only for ``--vo=gpu-next``)
+
+``--hdr-reference-white=<auto|10-1000000>``
+    Specifies the assumed peak brightness of the mastering display for SDR
+    content, in cd/m² (nits). This is used as HDR diffuse white level for SDR
+    content. Essentially this is the SDR brightness in HDR container.
+    Default is 203 cd/m². (Only for ``--vo=gpu-next``)
+
+    .. note::
+
+        This option overrides the ``--target-peak`` if is set and the target
+        transfer function is SDR. This way you can control SDR output separately
+        from HDR output.
+
+``--sdr-adjust-gamma=<auto|yes|no>``
+    SDR transfer functions are often ambiguous or mismatched. Even if files are
+    tagged with a specific function (e.g. ``bt.709``), the actual content may
+    not match. For example, most screen capture software tags its output as
+    ``bt.709``, but the content is usually a direct sRGB capture.
+
+    On the target side, "sRGB" is also ambiguous, some displays are factory
+    calibrated to a pure power 2.2 gamma, while others may use the sRGB
+    piecewise curve. Both of which are typically configured as "sRGB" in the
+    swapchain configuration. Similar inconsistencies exist across compositor
+    implementations of color management, as different platforms handle this in
+    different ways. See also ``--treat-srgb-as-power22``.
+    Additionally, ``bt.1886`` requires display contrast ratio to be known for
+    correct rendering, which is often unavailable. Use``--target-contrast`` to
+    specify it.
+
+    This option controls whether SDR content should have its gamma adjusted.
+    It only applies to the "sRGB" swapchain target configuration, since that is
+    the most common and ambiguous case. If set to ``no``, content tagged as
+    ``sRGB``, ``gamma2.2`` or ``bt.1886`` will be rendered as-is. If set to
+    ``yes``, it will be converted based on the available metadata.
+
+    ``auto`` (default) behaves like ``no``, except when ``--target-trc`` is
+    explicitly set, in which case it behaves like ``yes``.
+
+    Generally it's recommended to enable this option, if you can ensure that
+    both source and target metadata is correct.
+
+    (Only for ``--vo=gpu-next``)
+
+``--treat-srgb-as-power22=<no|input|output|both|auto>``
+    When enabled, sRGB is (de)linearized using a pure power 2.2 curve instead of
+    the standard sRGB piecewise transfer function.
+
+    ``auto`` behaves like ``both``, with possible platform-specific adjustments
+    to ensure a consistent appearance. Depending on the platform, the sRGB EOTF
+    used by the system compositor may differ.
+
+    The default is ``auto``. (Only for ``--vo=gpu-next``)
 
 ``--tone-mapping=<value>``
     Specifies the algorithm used for tone-mapping images onto the target
@@ -7695,9 +7772,12 @@ them.
     Tile size used to draw parts of the mpv window not covered by video in
     ``--background=tiles`` mode (default: 16).
 
-``--border-background=<none|color|tiles>``
+``--border-background=<none|color|tiles|blur>``
     Same as ``--background`` but only applies to the black bar/border area of
     the window. ``vo=gpu-next`` only. Defaults to ``color``.
+
+``--background-blur-radius=<radius>``
+    The blur radius (in pixels) to use for ``--border-background=blur``
 
 ``--opengl-rectangle-textures``
     Force use of rectangle textures (default: no). Normally this shouldn't have
@@ -8212,6 +8292,10 @@ Miscellaneous
     ``mac``
         macOS backend.
 
+    ``x11``
+        X11 backend. This backend is only available if the X server
+        supports the ``Xfixes`` extension.
+
     ``wayland``
         Wayland backend. This backend is only available if the compositor
         supports the ``ext-data-control-v1`` protocol.
@@ -8225,8 +8309,6 @@ Miscellaneous
     This is an object settings list option. See `List Options`_ for details.
 
 ``--clipboard-monitor=<yes|no>``
-    (Windows, Wayland and macOS only)
-
     Enable clipboard monitoring so that the ``clipboard`` property can be
     observed for content changes (default: no). This only affects clipboard
     implementations which use polling to monitor clipboard updates.
@@ -8236,6 +8318,15 @@ Miscellaneous
     On Wayland, this option only has effect on the ``wayland`` backend, and
     not for the ``vo`` backend. See ``current-clipboard-backend`` property for
     more details.
+
+``--clipboard-xwayland=<yes|no>``
+    Enable X11 clipboard backend in suspected Wayland environments
+    (default: no).
+
+    Depending on the Wayland compositor, using X11 backend may result in mpv
+    unable to acquire clipboard data from native Wayland clients. Disabling the
+    X11 backend when Wayland backend is unavailable makes mpv fallback to the
+    VO backend which allows clipboard to work properly.
 
 ``--register``
     (Windows only) (available also as mpv-register helper)

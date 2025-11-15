@@ -33,6 +33,7 @@ local opts = {
     font_size = 24,
     border_size = 1.65,
     background_alpha = 80,
+    gap = 0.2,
     padding = 10,
     menu_outline_size = 0,
     menu_outline_color = "#FFFFFF",
@@ -202,7 +203,7 @@ end
 
 -- Functions to calculate the font width.
 local width_length_ratio = 0.5
-local osd_width, osd_height = 100, 100
+local osd_width, osd_height = 0, 0
 local text_osd = mp.create_osd_overlay("ass-events")
 text_osd.compute_bounds, text_osd.hidden = true, true
 
@@ -297,7 +298,11 @@ local function get_scaled_osd_dimensions()
 end
 
 local function get_line_height()
-    return selectable_items and opts.font_size * 1.1 or opts.font_size
+    if selectable_items then
+        return opts.font_size * (1 + opts.gap)
+    end
+
+    return opts.font_size
 end
 
 local function calculate_max_lines()
@@ -784,7 +789,7 @@ local function render()
         ass:pos(x, y)
         ass:append("{\\1c&H" .. back_color .. "&\\1a&H" .. back_alpha ..
                    "&\\bord" .. opts.menu_outline_size .. "\\3c&H" ..
-                   color_option_to_ass(opts.menu_outline_color) .. "&}")
+                   color_option_to_ass(opts.menu_outline_color) .. "\\blur0&}")
         if border_style == "background-box" then
             ass:append("{\\4a&Hff&}")
         end
@@ -1328,13 +1333,8 @@ end
 -- Returns a string of UTF-8 text from the clipboard (or the primary selection)
 local function get_clipboard(clip)
     if platform == "x11" then
-        local res = utils.subprocess({
-            args = { "xclip", "-selection", clip and "clipboard" or "primary", "-out" },
-            playback_only = false,
-        })
-        if not res.error then
-            return res.stdout
-        end
+        local property = clip and "clipboard/text" or "clipboard/text-primary"
+        return mp.get_property(property, "")
     elseif platform == "wayland" then
         if mp.get_property("current-clipboard-backend") == "wayland" then
             local property = clip and "clipboard/text" or "clipboard/text-primary"
@@ -1651,7 +1651,12 @@ mp.register_script_message("get-input", function (script_name, args)
 
         -- Limit the number of characters to prevent libass from freezing mpv.
         -- Not important for terminal output.
-        local limit = terminal_output() and 5000 or (5 * osd_width / opts.font_size)
+        local limit
+        if osd_width == 0 or terminal_output() then
+            limit = 5000
+        else
+            limit = 5 * osd_width / opts.font_size
+        end
 
         for i, item in ipairs(args.items) do
             selectable_items[i] = item:gsub("[\r\n].*", "⋯"):sub(1, limit)

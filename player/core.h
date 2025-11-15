@@ -31,6 +31,7 @@
 #include "sub/osd.h"
 #include "video/mp_image.h"
 #include "video/out/vo.h"
+#include "osdep/als.h"
 
 // definitions used internally by the core player code
 
@@ -469,6 +470,8 @@ typedef struct MPContext {
     //     to true.
     struct demuxer *open_res_demuxer;
     int open_res_error;
+
+    struct mp_als *als_state; // lazily initialized on first use
 } MPContext;
 
 // Contains information about an asynchronous work item, how it can be aborted,
@@ -585,7 +588,7 @@ const char *mp_find_non_filename_media_title(MPContext *mpctx);
 void set_osd_bar(struct MPContext *mpctx, int type,
                  double min, double max, double neutral, double val);
 bool set_osd_msg(struct MPContext *mpctx, int level, int time,
-                 const char* fmt, ...) PRINTF_ATTRIBUTE(4,5);
+                 const char* fmt, ...) MP_PRINTF_ATTRIBUTE(4,5);
 void set_osd_function(struct MPContext *mpctx, int osd_function);
 void term_osd_clear_subs(struct MPContext *mpctx);
 void term_osd_set_subs(struct MPContext *mpctx, const char *text, int order);

@@ -823,7 +823,7 @@ local function append_hdr(s, hdr, video_out)
     local has_fall = hdr["max-fall"] and hdr["max-fall"] > 0
 
     if has_dml or has_cll or has_fall then
-        append(s, "", {prefix="HDR10:"})
+        append(s, "", {prefix=video_out and "" or "HDR10:", prefix_sep=video_out and "" or nil})
         if has_dml then
             -- libplacebo uses close to zero values as "defined zero"
             hdr["min-luma"] = hdr["min-luma"] <= 1e-6 and 0 or hdr["min-luma"]
@@ -1000,9 +1000,9 @@ local function add_video(s)
     end
 
     local track = mp.get_property_native("current-tracks/video")
-    if track then
-        append(s, "", {prefix=track.image and "Image:" or "Video:", nl=o.nl .. o.nl, indent=""})
-        append(s, track["codec-desc"], {prefix_sep="", nl="", indent=""})
+    local track_type = (track and track.image) and "Image:" or "Video:"
+    append(s, "", {prefix=track_type, nl=o.nl .. o.nl, indent=""})
+    if track and append(s, track["codec-desc"], {prefix_sep="", nl="", indent=""}) then
         append(s, track["codec-profile"], {prefix="[", nl="", indent=" ", prefix_sep="",
                no_prefix_markup=true, suffix="]"})
         if track["codec"] ~= track["decoder"] then
