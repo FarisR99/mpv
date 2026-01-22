@@ -820,8 +820,9 @@ Program Behavior
     (Default: ``yes``)
 
 ``--script=<filename>``, ``--scripts=file1.lua:file2.lua:...``
-    Load a Lua script. The second option allows you to load multiple scripts by
-    separating them with the path separator (``:`` on Unix, ``;`` on Windows).
+    Load a script (Lua or JS) or a C plugin. The second option allows you to
+    load multiple scripts by separating them with the path separator (``:`` on
+    Unix, ``;`` on Windows).
 
     ``--scripts`` is a path list option. See `List Options`_ for details.
 
@@ -3409,6 +3410,9 @@ Window
     example if ``--length`` is used to reduce the length to 1 frame, or if
     you seek to the last frame.
 
+    The effective duration is now `--speed` aware, which was not the case in
+    older mpv versions before v0.41.0.
+
     This option does not affect the framerate used for ``mf://`` or
     ``--merge-files``. For that, use ``--mf-fps`` instead.
 
@@ -5185,7 +5189,7 @@ Software Scaler
         a and b are the bicubic b and c parameters.
 
 ``--zimg-scaler-chroma=...``
-    Same as ``--zimg-scaler``, for for chroma interpolation (default: bilinear).
+    Same as ``--zimg-scaler``, for chroma interpolation (default: bilinear).
 
 ``--zimg-scaler-chroma-param-a``, ``--zimg-scaler-chroma-param-b``
     Same as ``--zimg-scaler-param-a`` / ``--zimg-scaler-param-b``, for chroma.
@@ -5867,12 +5871,15 @@ them.
     being increased a bit).
 
 ``--scale-antiring=<value>``, ``--cscale-antiring=<value>``, ``--dscale-antiring=<value>``, ``--tscale-antiring=<value>``
-    Set the antiringing strength. This tries to eliminate ringing, but can
-    introduce other artifacts in the process. Must be a float number between
-    0.0 and 1.0. The default value of 0.0 disables antiringing entirely.
+    Set the antiringing strength. This option tries to eliminate ringing, but can
+    introduce other artifacts in the process. The value must be a floating-point
+    number between 0.0 and 1.0.
+
+    The default is 0.0. The ``high-quality`` profile sets this to 0.6, which is
+    a fairly conservative value and should subtly enhance image quality.
 
     Note that this doesn't affect the special filters ``bilinear`` and
-    ``bicubic_fast``, nor does it affect any polar (EWA) scalers.
+    ``bicubic_fast``, nor does it affect any polar (EWA) scalers with vo_gpu.
 
     On ``--vo=gpu-next``, this also affects polar (EWA) scalers. Certain
     filter aliases may also implicitly enable antiringing, regardless of this
