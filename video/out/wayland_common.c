@@ -2327,6 +2327,10 @@ static void supported_coefficients_and_ranges(void *data, struct wp_color_repres
     struct vo_wayland_state *wl = data;
     int offset = range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL ? 0 : PL_COLOR_SYSTEM_COUNT;
     switch (coefficients) {
+    case WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY:
+        wl->coefficients_map[PL_COLOR_SYSTEM_RGB] = WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY;
+        wl->range_map[PL_COLOR_SYSTEM_RGB + offset] = range;
+        break;
     case WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709:
         wl->coefficients_map[PL_COLOR_SYSTEM_BT_709] = WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709;
         wl->range_map[PL_COLOR_SYSTEM_BT_709 + offset] = range;
@@ -4195,7 +4199,6 @@ void vo_wayland_handle_color(struct vo_wayland_state *wl)
     if (!wl->vo->target_params)
         return;
     struct mp_image_params target_params = vo_get_target_params(wl->vo);
-    pl_color_space_infer(&target_params.color);
     if (pl_color_space_equal(&target_params.color, &wl->target_params.color) &&
         pl_color_repr_equal(&target_params.repr, &wl->target_params.repr) &&
         target_params.chroma_location == wl->target_params.chroma_location)

@@ -419,7 +419,7 @@ The ``mp`` module is preloaded, although it can be loaded manually with
     and the function fn is a Lua function value.
 
     Some events have associated data. This is put into a Lua table and passed
-    as argument to fn. The Lua table by default contains a ``name`` field,
+    as argument to fn. The Lua table by default contains a ``event`` field,
     which is a string containing the event name. If the event has an error
     associated, the ``error`` field is set to a string describing the error,
     on success it's not set.
@@ -929,7 +929,12 @@ REPL.
         the text in the console.
 
     ``keep_open``
-        Whether to keep the console open on submit. Defaults to ``false``.
+        Whether to keep the console open on submit, allowing further input.
+        Defaults to ``false``.
+
+        If calling ``input.get()`` or ``input.select()`` again from inside the
+        ``submit`` callback, setting this option to ``true`` allows a seamless
+        transition without the console closing and reopening.
 
     ``opened``
         A callback invoked when the console is shown. This can be used to
@@ -1028,7 +1033,12 @@ REPL.
         the 1-based index of the selected item.
 
     ``keep_open``
-        Whether to keep the console open on submit. Defaults to ``false``.
+        Whether to keep the console open on submit, allowing further input.
+        Defaults to ``false``.
+
+        If calling ``input.get()`` or ``input.select()`` again from inside the
+        ``submit`` callback, setting this option to ``true`` allows a seamless
+        transition without the console closing and reopening.
 
     Example:
 
