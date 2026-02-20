@@ -120,6 +120,7 @@ struct track {
     char *title;
     bool default_track, forced_track, dependent_track;
     bool visual_impaired_track, hearing_impaired_track;
+    bool original_track, commentary_track;
     bool forced_select; // if the track was selected because it is forced
     bool image;
     bool attached_picture;
@@ -553,7 +554,7 @@ void update_demuxer_properties(struct MPContext *mpctx);
 void print_track_list(struct MPContext *mpctx, const char *msg);
 void reselect_demux_stream(struct MPContext *mpctx, struct track *track,
                            bool refresh_only);
-void prepare_playlist(struct MPContext *mpctx, struct playlist *pl);
+void prepare_playlist(struct MPContext *mpctx, struct playlist *pl, bool overwrite_current);
 void autoload_external_files(struct MPContext *mpctx, struct mp_cancel *cancel);
 struct track *select_default_track(struct MPContext *mpctx, int order,
                                    enum stream_type type);

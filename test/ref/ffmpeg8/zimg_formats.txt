@@ -1,9 +1,11 @@
            0bgr    Zin   Zout  SWSin  SWSout |
            0rgb    Zin   Zout  SWSin  SWSout |
            abgr    Zin   Zout  SWSin  SWSout |
+            amf                              |
            argb    Zin   Zout  SWSin  SWSout |
+           ayuv    Zin   Zout  SWSin  SWSout |
          ayuv64    Zin   Zout  SWSin  SWSout |
-       ayuv64be    Zin   Zout                |
+       ayuv64be    Zin   Zout  SWSin  SWSout |
    bayer_bggr16                SWSin         |
  bayer_bggr16be                SWSin         |
     bayer_bggr8                SWSin         |
@@ -35,6 +37,7 @@
            cuda                              |
           d3d11                              |
     d3d11va_vld                              |
+          d3d12                              |
       drm_prime                              |
       dxva2_vld                              |
           gbrap    Zin   Zout  SWSin  SWSout |
@@ -46,14 +49,22 @@
       gbrap14be    Zin   Zout  SWSin  SWSout |
         gbrap16    Zin   Zout  SWSin  SWSout |
       gbrap16be    Zin   Zout  SWSin  SWSout |
+        gbrap32                              |
+      gbrap32be                              |
+       gbrapf16    Zin   Zout  SWSin         |
+     gbrapf16be    Zin   Zout  SWSin         |
        gbrapf32    Zin   Zout  SWSin  SWSout |
      gbrapf32be    Zin   Zout  SWSin  SWSout |
            gbrp    Zin   Zout  SWSin  SWSout |
           gbrp1    Zin   Zout                |
          gbrp10    Zin   Zout  SWSin  SWSout |
        gbrp10be    Zin   Zout  SWSin  SWSout |
+      gbrp10msb    Zin   Zout  SWSin  SWSout |
+    gbrp10msbbe    Zin   Zout  SWSin  SWSout |
          gbrp12    Zin   Zout  SWSin  SWSout |
        gbrp12be    Zin   Zout  SWSin  SWSout |
+      gbrp12msb    Zin   Zout  SWSin  SWSout |
+    gbrp12msbbe    Zin   Zout  SWSin  SWSout |
          gbrp14    Zin   Zout  SWSin  SWSout |
        gbrp14be    Zin   Zout  SWSin  SWSout |
          gbrp16    Zin   Zout  SWSin  SWSout |
@@ -65,6 +76,8 @@
           gbrp6    Zin   Zout                |
           gbrp9    Zin   Zout  SWSin  SWSout |
         gbrp9be    Zin   Zout  SWSin  SWSout |
+        gbrpf16    Zin   Zout  SWSin         |
+      gbrpf16be    Zin   Zout  SWSin         |
         gbrpf32    Zin   Zout  SWSin  SWSout |
       gbrpf32be    Zin   Zout  SWSin  SWSout |
            gray    Zin   Zout  SWSin  SWSout |
@@ -76,9 +89,13 @@
        gray14be    Zin   Zout  SWSin  SWSout |
          gray16    Zin   Zout  SWSin  SWSout |
        gray16be    Zin   Zout  SWSin  SWSout |
+         gray32                              |
+       gray32be                              |
           gray9    Zin   Zout  SWSin  SWSout |
         gray9be    Zin   Zout  SWSin  SWSout |
        grayaf32    Zin   Zout                |
+        grayf16    Zin   Zout  SWSin         |
+      grayf16be    Zin   Zout  SWSin         |
         grayf32    Zin   Zout  SWSin  SWSout |
       grayf32be    Zin   Zout  SWSin  SWSout |
      mediacodec                              |
@@ -87,11 +104,12 @@
           monow    Zin   Zout  SWSin  SWSout |
            nv12    Zin   Zout  SWSin  SWSout |
            nv16    Zin   Zout  SWSin  SWSout |
-           nv20    Zin   Zout                |
-         nv20be    Zin   Zout                |
+           nv20    Zin   Zout  SWSin  SWSout |
+         nv20be    Zin   Zout  SWSin  SWSout |
            nv21    Zin   Zout  SWSin  SWSout |
            nv24    Zin   Zout  SWSin  SWSout |
            nv42    Zin   Zout  SWSin  SWSout |
+        ohcodec                              |
          opencl                              |
            p010    Zin   Zout  SWSin  SWSout |
          p010be    Zin   Zout  SWSin  SWSout |
@@ -126,17 +144,26 @@
          rgb565    Zin   Zout  SWSin  SWSout |
        rgb565be    Zin   Zout  SWSin  SWSout |
            rgb8    Zin   Zout  SWSin  SWSout |
+          rgb96                              |
+        rgb96be                              |
            rgba    Zin   Zout  SWSin  SWSout |
+        rgba128                              |
+      rgba128be                              |
          rgba64    Zin   Zout  SWSin  SWSout |
        rgba64be    Zin   Zout  SWSin  SWSout |
         rgbaf16                SWSin         |
       rgbaf16be                SWSin         |
         rgbaf32                              |
       rgbaf32be                              |
-         rgbf32                              |
-       rgbf32be                              |
+         rgbf16                SWSin         |
+       rgbf16be                SWSin         |
+         rgbf32                SWSin         |
+       rgbf32be                SWSin         |
+           uyva    Zin   Zout  SWSin  SWSout |
         uyvy422    Zin   Zout  SWSin  SWSout |
-      uyyvyy411    Zin   Zout                |
+      uyyvyy411    Zin   Zout  SWSin         |
+           v30x                SWSin  SWSout |
+         v30xbe                              |
           vaapi                              |
           vdpau                              |
    vdpau_output                              |
@@ -144,6 +171,7 @@
          vulkan                              |
            vuya    Zin   Zout  SWSin  SWSout |
            vuyx    Zin   Zout  SWSin  SWSout |
+         vyu444    Zin   Zout  SWSin  SWSout |
         x2bgr10    Zin   Zout  SWSin  SWSout |
       x2bgr10be    Zin   Zout                |
         x2rgb10    Zin   Zout  SWSin  SWSout |
@@ -151,8 +179,9 @@
            xv30    Zin   Zout  SWSin  SWSout |
          xv30be    Zin   Zout                |
            xv36    Zin   Zout  SWSin  SWSout |
-         xv36be    Zin   Zout                |
-           xvmc                              |
+         xv36be    Zin   Zout  SWSin  SWSout |
+           xv48    Zin   Zout  SWSin  SWSout |
+         xv48be    Zin   Zout  SWSin  SWSout |
           xyz12    Zin   Zout  SWSin  SWSout |
         xyz12be    Zin   Zout  SWSin  SWSout |
              y1    Zin   Zout                |
@@ -160,9 +189,15 @@
          y210be    Zin   Zout                |
            y212    Zin   Zout  SWSin  SWSout |
          y212be    Zin   Zout                |
+           y216    Zin   Zout  SWSin  SWSout |
+         y216be    Zin   Zout                |
            ya16    Zin   Zout  SWSin  SWSout |
          ya16be    Zin   Zout  SWSin  SWSout |
             ya8    Zin   Zout  SWSin  SWSout |
+          yaf16                SWSin         |
+        yaf16be                SWSin         |
+          yaf32                SWSin         |
+        yaf32be                SWSin         |
           yap16    Zin   Zout                |
            yap8    Zin   Zout                |
         yuv410p    Zin   Zout  SWSin  SWSout |
@@ -202,8 +237,12 @@
         yuv444p    Zin   Zout  SWSin  SWSout |
       yuv444p10    Zin   Zout  SWSin  SWSout |
     yuv444p10be    Zin   Zout  SWSin  SWSout |
+   yuv444p10msb    Zin   Zout  SWSin  SWSout |
+ yuv444p10msbbe    Zin   Zout  SWSin  SWSout |
       yuv444p12    Zin   Zout  SWSin  SWSout |
     yuv444p12be    Zin   Zout  SWSin  SWSout |
+   yuv444p12msb    Zin   Zout  SWSin  SWSout |
+ yuv444p12msbbe    Zin   Zout  SWSin  SWSout |
       yuv444p14    Zin   Zout  SWSin  SWSout |
     yuv444p14be    Zin   Zout  SWSin  SWSout |
       yuv444p16    Zin   Zout  SWSin  SWSout |

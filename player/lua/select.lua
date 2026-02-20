@@ -112,7 +112,7 @@ local function format_flags(track)
 
     for _, flag in ipairs({
         "default", "forced", "dependent", "visual-impaired", "hearing-impaired",
-        "image", "external"
+        "original", "commentary", "image", "external"
     }) do
         if track[flag] then
             flags = flags .. flag .. " "
@@ -785,7 +785,6 @@ mp.add_key_binding(nil, "menu", function ()
     end
 
     input.select({
-        prompt = "",
         items = labels,
         keep_open = true,
         submit = function (i)
@@ -962,6 +961,11 @@ local function on_idle()
     mp.set_property_native("menu-data", menu_data)
 end
 
+-- quote string and escape it in JSON-style
+local function quote(str)
+    return utils.format_json(str or "")
+end
+
 local function clamp_submenu(submenu, max, cmd)
     if #submenu <= max then
        return submenu
@@ -1040,9 +1044,19 @@ end
 
 local function tracks(property, track_type)
     local items = {}
+    local track_list = get("track-list")
     local last_type
 
-    for _, track in ipairs(get("track-list")) do
+    local positions = {video = 0, audio = 1, sub = 2}
+    table.sort(track_list, function (i, j)
+        if i.type ~= j.type then
+            return positions[i.type] < positions[j.type]
+        end
+
+        return i.id < j.id
+    end)
+
+    for _, track in ipairs(track_list) do
         if not track_type or track.type == track_type then
             if last_type and track.type ~= last_type then
                 items[#items + 1] = { type = "separator" }
@@ -1111,7 +1125,7 @@ local function audio_devices()
     for i, device in ipairs(get("audio-device-list")) do
         items[i] = {
             title = format_audio_device(device):gsub("&", "&&"),
-            cmd = "set audio-device " .. device.name,
+            cmd = "set audio-device " .. quote(device.name),
         }
 
         if device.name == selected_device then
@@ -1154,8 +1168,8 @@ local function profiles()
 
     for _, profile in ipairs(user_profiles) do
         items[#items + 1] = {
-            title = profile,
-            cmd = "apply-profile " .. profile:gsub("&", "&&"),
+            title = profile:gsub("&", "&&"),
+            cmd = "apply-profile " .. quote(profile),
         }
     end
 
