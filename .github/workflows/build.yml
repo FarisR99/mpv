@@ -58,7 +58,7 @@ jobs:
         run: echo "timestamp=`date +%s%N`" >> $GITHUB_OUTPUT
 
       - name: Restore cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ env.TARGET }}-${{ steps.get_time.outputs.timestamp }}
@@ -116,13 +116,13 @@ jobs:
           PR=${{ github.event.pull_request.number && format('-pr{0}', github.event.pull_request.number) || '' }}
           echo "name=mpv-$VER$PR-${{ github.run_id }}-$TARGET" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: artifact/*
 
       - name: Save Cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         if: always()
         with:
           path: ${{ env.CCACHE_DIR }}
@@ -136,12 +136,11 @@ jobs:
         include:
           - target: x86_64-pc-windows-msvc
             arch: "x64"
-            os: "windows-latest"
+            os: "windows-2025-vs2026"
           - target: aarch64-pc-windows-msvc
             arch: "arm64"
             os: "windows-11-arm"
     env:
-      VS: "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise"
       CC: "ccache clang"
       CXX: "ccache clang++"
       CC_LD: "lld-link"
@@ -165,7 +164,7 @@ jobs:
           "timestamp=$((Get-Date).Ticks)" >> $env:GITHUB_OUTPUT
 
       - name: Restore cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ matrix.target }}-${{ steps.get_time.outputs.timestamp }}
@@ -173,8 +172,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install meson==1.9.2
-          choco install ccache nasm
+          python -m pip install meson
+          winget install --accept-source-agreements --accept-package-agreements Ccache.Ccache NASM.NASM
+          echo "$env:LOCALAPPDATA\Microsoft\WinGet\Links" >> $env:GITHUB_PATH
           # For cargo -C
           rustup default nightly
 
@@ -186,6 +186,14 @@ jobs:
           meson wrap install harfbuzz
           meson wrap install libpng
           meson wrap install zlib
+
+      - name: Find Visual Studio
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { throw "Could not find a Visual Studio installation" }
+          "VS=$vsPath"
+          "VS=$vsPath" >> $env:GITHUB_ENV
 
       - name: Build
         id: build
@@ -228,7 +236,7 @@ jobs:
           $name = "mpv-$VER$PR-${{ github.run_id }}-${{ matrix.target }}"
           "name=$name" >> $env:GITHUB_OUTPUT
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: |
@@ -238,14 +246,14 @@ jobs:
             !build/mpv.lib
             !build/mpv.pdb
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}-pdb
           path: |
             build/mpv.pdb
 
       - name: Save Cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         if: always()
         with:
           path: ${{ env.CCACHE_DIR }}
@@ -378,21 +386,21 @@ jobs:
       matrix:
         include:
           - sys: "clang64"
-            os: "windows-latest"
+            os: "windows-2025-vs2026"
             auto-var-init: "uninitialized"
           - sys: "clang64"
-            os: "windows-latest"
+            os: "windows-2025-vs2026"
             asan: true
           - sys: "clang64"
-            os: "windows-latest"
+            os: "windows-2025-vs2026"
             auto-var-init: "zero"
           - sys: "clang64"
-            os: "windows-latest"
+            os: "windows-2025-vs2026"
             auto-var-init: "pattern"
           - sys: "mingw64"
-            os: "windows-latest"
+            os: "windows-2025-vs2026"
           - sys: "ucrt64"
-            os: "windows-latest"
+            os: "windows-2025-vs2026"
           - sys: "clangarm64"
             os: "windows-11-arm"
     defaults:

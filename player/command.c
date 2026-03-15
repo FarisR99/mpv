@@ -536,9 +536,7 @@ static int mp_property_filename(void *ctx, struct m_property *prop,
         if (strcmp(ka->key, "no-ext") == 0) {
             action = ka->action;
             arg = ka->arg;
-            bstr root;
-            if (mp_splitext(f, &root))
-                f = bstrto0(filename, root);
+            f = mp_strip_ext(filename, f);
         }
     }
     int r = m_property_strdup_ro(action, arg, f);
@@ -2092,6 +2090,7 @@ static int get_track_entry(int item, int action, void *arg, void *ctx)
         {"demux-bitrate",  SUB_PROP_INT(p.bitrate), .unavailable = p.bitrate <= 0},
         {"demux-rotation", SUB_PROP_INT(p.rotate),  .unavailable = p.rotate <= 0},
         {"demux-par",      SUB_PROP_DOUBLE(par),    .unavailable = par <= 0},
+        {"demux-duration", SUB_PROP_PTS(p.duration), .unavailable = p.duration <= 0},
         {"format-name", SUB_PROP_STR(p.format_name), .unavailable = !p.format_name},
         {"replaygain-track-peak", SUB_PROP_FLOAT(rg.track_peak),
                         .unavailable = !has_rg},
@@ -5153,6 +5152,28 @@ static void replace_overlay(struct MPContext *mpctx, int id, struct overlay *new
     recreate_overlays(mpctx);
 }
 
+static bool
+fread_pic(FILE *fp, mp_image_t *dst, size_t bytesPerLine, size_t h, size_t stride, size_t offset)
+{
+    size_t bytesRead = 0, expectedBytes = h * bytesPerLine;
+    size_t src_off = offset, dst_off = 0;
+    if (stride == dst->stride[0]) {
+        fseek(fp, src_off, SEEK_SET);
+        bytesRead = fread(dst->planes[0], 1, expectedBytes, fp);
+    } else {
+        for (int i = 0; i < h; i++) {
+            fseek(fp, src_off, SEEK_SET);
+            size_t r = fread(dst->planes[0] + dst_off, 1, bytesPerLine, fp);
+            if (r != bytesPerLine)
+                break;
+            bytesRead += bytesPerLine;
+            src_off += stride;
+            dst_off += dst->stride[0];
+        }
+    }
+    return bytesRead == expectedBytes;
+}
+
 static void cmd_overlay_add(void *pcmd)
 {
     struct mp_cmd_ctx *cmd = pcmd;
@@ -5176,7 +5197,7 @@ static void cmd_overlay_add(void *pcmd)
         MP_ERR(mpctx, "overlay-add: invalid id %d\n", id);
         goto error;
     }
-    if (w <= 0 || h <= 0 || stride < w * 4 || (stride % 4)) {
+    if (w <= 0 || h <= 0 || stride < w * 4 || (stride % 4) || offset < 0) {
         MP_ERR(mpctx, "overlay-add: inconsistent parameters\n");
         goto error;
     }
@@ -5190,14 +5211,12 @@ static void cmd_overlay_add(void *pcmd)
     if (!overlay.source)
         goto error;
     int fd = -1;
-    bool close_fd = true;
     void *p = NULL;
     if (file[0] == '@') {
         char *end;
-        fd = strtol(&file[1], &end, 10);
-        if (!file[1] || end[0])
-            fd = -1;
-        close_fd = false;
+        int srcfd = strtol(&file[1], &end, 10);
+        if (file[1] && end[0] == '\0' && srcfd >= 0)
+            fd = mp_dup_cloexec(srcfd); // fdopen will "own" the fd
     } else if (file[0] == '&') {
         char *end;
         unsigned long long addr = strtoull(&file[1], &end, 0);
@@ -5207,24 +5226,22 @@ static void cmd_overlay_add(void *pcmd)
     } else {
         fd = open(file, O_RDONLY | O_BINARY | O_CLOEXEC);
     }
-    int map_size = 0;
-    if (fd >= 0) {
-        map_size = offset + h * stride;
-        void *m = mmap(NULL, map_size, PROT_READ, MAP_SHARED, fd, 0);
-        if (close_fd)
-            close(fd);
-        if (m && m != MAP_FAILED)
-            p = m;
+
+    FILE *fp = (fd >= 0) ? fdopen(fd, "rb") : NULL;
+    int open_or_read_err = 1, bytesPerLine = w * 4;
+    if (p) {
+        memcpy_pic(overlay.source->planes[0], (char *)p + offset, bytesPerLine,
+                   h, overlay.source->stride[0], stride);
+        open_or_read_err = 0;
+    } else if (fp) {
+        open_or_read_err = !fread_pic(fp, overlay.source, bytesPerLine, h, stride, offset);
+        fclose(fp);
     }
-    if (!p) {
-        MP_ERR(mpctx, "overlay-add: could not open or map '%s'\n", file);
+    if (open_or_read_err) {
+        MP_ERR(mpctx, "overlay-add: could not open or read '%s'\n", file);
         talloc_free(overlay.source);
         goto error;
     }
-    memcpy_pic(overlay.source->planes[0], (char *)p + offset, w * 4, h,
-               overlay.source->stride[0], stride);
-    if (map_size)
-        munmap(p, map_size);
 
     replace_overlay(mpctx, id, &overlay);
     return;
@@ -5609,15 +5626,23 @@ void run_command(struct MPContext *mpctx, struct mp_cmd *cmd,
 
     if (cmd->flags & MP_EXPAND_PROPERTIES) {
         for (int n = 0; n < cmd->nargs; n++) {
-            if (cmd->args[n].type->type == CONF_TYPE_STRING) {
-                char *s = mp_property_expand_string(mpctx, cmd->args[n].v.s);
+            const m_option_type_t *type = cmd->args[n].type->type;
+            char **list = NULL;
+            if (type == CONF_TYPE_STRING)
+                list = &cmd->args[n].v.s;
+            else if (type == CONF_TYPE_STRING_LIST || type == CONF_TYPE_KV_LIST)
+                list = cmd->args[n].v.str_list;
+            for (; list && *list; list++) {
+                char *s = mp_property_expand_string(mpctx, *list);
                 if (!s) {
                     ctx->success = false;
                     mp_cmd_ctx_complete(ctx);
                     return;
                 }
-                talloc_free(cmd->args[n].v.s);
-                cmd->args[n].v.s = s;
+                talloc_free(*list);
+                *list = s;
+                if (type == CONF_TYPE_STRING)
+                    break;
             }
         }
     }
@@ -5986,9 +6011,13 @@ static void cmd_playlist_play_index(void *p)
     struct MPContext *mpctx = cmd->mpctx;
     struct playlist *pl = mpctx->playlist;
     int pos = cmd->args[0].v.i;
+    bool preserve_options = cmd->num_args >= 2 && cmd->args[1].v.b;
 
     if (pos == -2)
         pos = playlist_entry_to_index(pl, pl->current);
+
+    if (preserve_options && pl->current && pos == pl->current->pl_index)
+        pl->current->reloading = true;
 
     mp_set_playlist_entry(mpctx, playlist_entry_from_index(pl, pos));
     if (cmd->on_osd & MP_ON_OSD_MSG)
@@ -6911,7 +6940,8 @@ static void cmd_mouse(void *p)
     if (button == -1) {// no button
         if (pre_key)
             mp_input_put_key_artificial(mpctx->input, pre_key, 1);
-        mp_input_set_mouse_pos_artificial(mpctx->input, x, y);
+        if (pre_key != MP_KEY_MOUSE_LEAVE)
+            mp_input_set_mouse_pos_artificial(mpctx->input, x, y);
         return;
     }
     if (button < 0 || button >= MP_KEY_MOUSE_BTN_COUNT) {// invalid button
@@ -6929,8 +6959,10 @@ static void cmd_mouse(void *p)
     button += dbc ? MP_MBTN_DBL_BASE : MP_MBTN_BASE;
     if (pre_key)
         mp_input_put_key_artificial(mpctx->input, pre_key, 1);
-    mp_input_set_mouse_pos_artificial(mpctx->input, x, y);
-    mp_input_put_key_artificial(mpctx->input, button, 1);
+    if (pre_key != MP_KEY_MOUSE_LEAVE) {
+        mp_input_set_mouse_pos_artificial(mpctx->input, x, y);
+        mp_input_put_key_artificial(mpctx->input, button, 1);
+    }
 }
 
 static void cmd_key(void *p)
@@ -7255,6 +7287,7 @@ const struct mp_cmd_def mp_cmds[] = {
         {
             {"index", OPT_CHOICE(v.i, {"current", -2}, {"none", -1}),
                 M_RANGE(-1, INT_MAX)},
+            {"preserve-options", OPT_BOOL(v.b), .flags = MP_CMD_OPT_ARG},
         }
     },
     { "playlist-shuffle", cmd_playlist_shuffle, },

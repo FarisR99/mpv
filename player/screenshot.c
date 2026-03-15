@@ -40,6 +40,7 @@
 #include "video/image_writer.h"
 #include "video/sws_utils.h"
 #include "sub/osd.h"
+#include "stream/stream.h"
 
 #include "video/csputils.h"
 
@@ -66,14 +67,6 @@ void screenshot_init(struct MPContext *mpctx)
         .frameno = 1,
         .log = mp_log_new(mpctx, mpctx->log, "screenshot")
     };
-}
-
-static char *stripext(void *talloc_ctx, const char *s)
-{
-    const char *end = strrchr(s, '.');
-    if (!end)
-        end = s + strlen(s);
-    return talloc_asprintf(talloc_ctx, "%.*s", (int)(end - s), s);
 }
 
 static bool write_screenshot(struct mp_cmd_ctx *cmd, struct mp_image *img,
@@ -175,16 +168,20 @@ static char *create_fname(struct MPContext *mpctx, char *template,
         }
         case 'f':
         case 'F': {
-            char *video_file = NULL;
-            if (mpctx->filename)
-                video_file = mp_basename(mpctx->filename);
+            char *name;
+            if (!mpctx->filename) {
+                name = "NO_FILE";
+            } else if (bstr_endswith0(bstr0(mpctx->filename), "/")) {
+                name = mpctx->filename;
+            } else {
+                name = mp_basename(mpctx->filename);
+            }
 
-            if (!video_file)
-                video_file = "NO_FILE";
+            if (mp_is_url(bstr0(mpctx->filename)))
+                name = mp_url_unescape(res, name);
 
-            char *name = video_file;
             if (fmt == 'F')
-                name = stripext(res, video_file);
+                name = mp_strip_ext(res, name);
             append_filename(&res, name);
             break;
         }
@@ -300,9 +297,6 @@ static char *gen_fname(struct mp_cmd_ctx *cmd, const char *file_ext)
             void *t = fname;
             dir = mp_get_user_path(t, ctx->mpctx->global, dir);
             fname = mp_path_join(NULL, dir, fname);
-
-            mp_mkdirp(dir);
-
             talloc_free(t);
         }
 

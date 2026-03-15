@@ -888,13 +888,8 @@ static void apply_target_options(struct priv *p, struct pl_frame *target,
     }
     if ((!target->color.hdr.min_luma || !hint))
         apply_target_contrast(p, &target->color, min_luma);
-    if (opts->target_gamut) {
-        // Ensure resulting gamut still fits inside container
-        const struct pl_raw_primaries *gamut, *container;
-        gamut = pl_raw_primaries_get(opts->target_gamut);
-        container = pl_raw_primaries_get(target->color.primaries);
-        target->color.hdr.prim = pl_primaries_clip(gamut, container);
-    }
+    if (opts->target_gamut)
+        target->color.hdr.prim = *pl_raw_primaries_get(opts->target_gamut);
     int dither_depth = opts->dither_depth;
     if (dither_depth == 0) {
         struct ra_swapchain *sw = p->ra_ctx->swapchain;
@@ -942,6 +937,33 @@ static void apply_crop(struct pl_frame *frame, struct mp_rect crop,
         frame->crop.y0 = height - frame->crop.y0;
         frame->crop.y1 = height - frame->crop.y1;
     }
+}
+
+static bool set_colorspace_hint(struct priv *p, struct pl_color_space *hint)
+{
+    struct ra_swapchain *sw = p->ra_ctx->swapchain;
+    enum pl_alpha_mode alpha = PL_ALPHA_UNKNOWN;
+#if PL_API_VER >= 344
+    alpha = PL_ALPHA_NONE;
+#endif
+
+    struct mp_image_params params = {
+        .color = hint ? *hint : pl_color_space_srgb,
+        .repr = {
+            .sys = PL_COLOR_SYSTEM_RGB,
+            .levels = p->output_levels ? p->output_levels : PL_COLOR_LEVELS_FULL,
+            .alpha = p->ra_ctx->opts.want_alpha ? PL_ALPHA_INDEPENDENT : alpha,
+        },
+    };
+
+    if (sw->fns->set_color && sw->fns->set_color(sw, hint ? &params : NULL)) {
+        if (hint) {
+            *hint = params.color;
+            return true;
+        }
+    }
+    pl_swapchain_colorspace_hint(p->sw, hint);
+    return false;
 }
 
 static void update_tm_viz(struct pl_color_map_params *params,
@@ -1082,7 +1104,6 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
 
     struct ra_swapchain *sw = p->ra_ctx->swapchain;
 
-    bool pass_colorspace = false;
     struct pl_color_space target_csp = {0};
     // TODO: Implement this for all backends
     if (sw->fns->target_csp)
@@ -1093,13 +1114,6 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
         // limit min_luma to 1000:1 contrast ratio in SDR mode
         if (target_csp.hdr.min_luma > PL_COLOR_SDR_WHITE / PL_COLOR_SDR_CONTRAST)
             target_csp.hdr.min_luma = 0;
-        // Don't use reported display peak in SDR mode. Mostly because libplacebo
-        // forcefully switches to PQ if hinting hdr metadata, ignoring the transfer
-        // set in the hint. But also because setting target peak in SDR mode is
-        // very specific usecase, needs proper calibration, users can set it manually.
-        target_csp.hdr.max_luma = 0;
-        target_csp.hdr.max_cll = 0;
-        target_csp.hdr.max_fall = 0;
     }
     // maxFALL in display metadata is in fact MaxFullFrameLuminance. Wayland
     // reports it as maxFALL directly, but this doesn't mean the same thing.
@@ -1116,6 +1130,7 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
         target_csp = (struct pl_color_space){
             .transfer = opts->target_trc ? opts->target_trc : pl_color_space_hdr10.transfer };
     }
+    bool external_params = false;
     if (target_hint && frame->current) {
         const struct pl_color_space *source = &frame->current->params.color;
         const struct pl_color_space *target = &target_csp;
@@ -1130,14 +1145,6 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
                 pl_color_space_merge(&hint, source);
             if (target_unknown && !opts->target_trc && !pl_color_transfer_is_hdr(source->transfer))
                 hint = *source;
-            // Vulkan doesn't have support for gamma 2.2 transfer function,
-            // so even though requested preferred color space is gamma 2.2, we
-            // fallback to sRGB. sRGB itself is ambiguous, but at least we have
-            // options to control the behavior.
-            // TODO: Revise this after fix for linear transfers lands in libplacebo.
-            // <https://code.videolan.org/videolan/libplacebo/-/merge_requests/759>
-            if (hint.transfer == PL_COLOR_TRC_GAMMA22)
-                hint.transfer = PL_COLOR_TRC_SRGB;
             // Restore target luminance if it was present, note that we check
             // max_luma only, this make sure that max_cll/max_fall is not take
             // from source.
@@ -1178,17 +1185,10 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
             hint.hdr.max_cll  = target->hdr.max_cll;
             hint.hdr.max_fall = target->hdr.max_fall;
         }
-        if (p->ra_ctx->fns->pass_colorspace && p->ra_ctx->fns->pass_colorspace(p->ra_ctx))
-            pass_colorspace = true;
         if (opts->target_prim)
             hint.primaries = opts->target_prim;
-        if (opts->target_gamut) {
-            // Ensure resulting gamut still fits inside container
-            const struct pl_raw_primaries *gamut, *container;
-            gamut = pl_raw_primaries_get(opts->target_gamut);
-            container = pl_raw_primaries_get(hint.primaries);
-            hint.hdr.prim = pl_primaries_clip(gamut, container);
-        }
+        if (opts->target_gamut)
+            hint.hdr.prim = *pl_raw_primaries_get(opts->target_gamut);
         if (opts->target_trc)
             hint.transfer = opts->target_trc;
         if (opts->target_peak)
@@ -1226,12 +1226,11 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
         // Update again after possible max_luma change
         if (p->icc_profile)
             hint = p->icc_profile->csp;
-        if (!pass_colorspace)
-            pl_swapchain_colorspace_hint(p->sw, &hint);
+        external_params = set_colorspace_hint(p, &hint);
     } else if (!target_hint) {
         if (!hint.hdr.min_luma)
             hint.hdr.min_luma = target_csp.hdr.min_luma;
-        pl_swapchain_colorspace_hint(p->sw, NULL);
+        external_params = set_colorspace_hint(p, NULL);
     }
 
     struct pl_swapchain_frame swframe;
@@ -1258,8 +1257,19 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
     // Calculate target
     struct pl_frame target;
     pl_frame_from_swapchain(&target, &swframe);
-    bool strict_sw_params = target_hint && !pass_colorspace && p->next_opts->target_hint_strict;
+    if (external_params)
+        target.color = hint;
+    bool strict_sw_params = target_hint && p->next_opts->target_hint_strict;
     apply_target_options(p, &target, hint.hdr.min_luma, strict_sw_params);
+    bool clip_gamut = pl_primaries_valid(&target.color.hdr.prim);
+#if PL_API_VER >= 362
+    clip_gamut = clip_gamut && target.color.transfer != PL_COLOR_TRC_SCRGB;
+#endif
+    if (clip_gamut) {
+        // Ensure resulting gamut still fits inside container
+        target.color.hdr.prim = pl_primaries_clip(&target.color.hdr.prim,
+                                    pl_raw_primaries_get(target.color.primaries));
+    }
     if (target.color.transfer == PL_COLOR_TRC_SRGB && frame->current &&
         ((opts->sdr_adjust_gamma == 0 && opts->target_trc == PL_COLOR_TRC_UNKNOWN) ||
          opts->sdr_adjust_gamma == -1))
@@ -1414,7 +1424,7 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
                         ? swframe.fbo->params.format->name : NULL,
         .w = mp_rect_w(p->dst),
         .h = mp_rect_h(p->dst),
-        .color = pass_colorspace ? hint : target.color,
+        .color = target.color,
         .repr = target.repr,
         .rotate = target.rotation,
     };

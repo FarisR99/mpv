@@ -1857,6 +1857,7 @@ static void play_current_file(struct MPContext *mpctx)
         }
     }
 
+    process_hooks(mpctx, "on_loaded");
     for (int t = 0; t < STREAM_TYPE_COUNT; t++)
         for (int n = 0; n < mpctx->num_tracks; n++)
             if (mpctx->tracks[n]->type == t)
@@ -1985,7 +1986,13 @@ terminate_playback:
     // Possibly stop ongoing async commands.
     mp_abort_playback_async(mpctx);
 
-    m_config_restore_backups(mpctx->mconfig);
+    struct playlist_entry *current = mpctx->playlist->current;
+    bool reloading = mpctx->stop_play == PT_CURRENT_ENTRY &&
+                     current && current->reloading;
+    if (current)
+        current->reloading = false;
+    if (!reloading)
+        m_config_restore_backups(mpctx->mconfig);
 
     TA_FREEP(&mpctx->filter_root);
     talloc_free(mpctx->filtered_tags);

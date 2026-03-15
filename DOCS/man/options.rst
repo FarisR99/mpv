@@ -3134,6 +3134,16 @@ Subtitles
 
     Default: 34
 
+``--sub-margin-y-offset=<size>``
+    Additional vertical offset added to the subtitle margin, in scaled pixels.
+    This is added on top of ``--sub-margin-y``.
+
+    This is intended for dynamic margin adjustments at runtime (e.g. by
+    scripts like the OSC to avoid subtitle/UI overlap). For persistent
+    settings, use ``--sub-margin-y`` instead.
+
+    Default: 0
+
 ``--sub-align-x=<left|center|right>``
     Control to which corner of the screen text subtitles should be
     aligned to (default: ``center``).
@@ -3149,8 +3159,6 @@ Subtitles
     Control how multi line subs are justified irrespective of where they
     are aligned (default: ``auto`` which justifies as defined by
     ``--sub-align-x``).
-    Left justification is recommended to make the subs easier to read
-    as it is easier for the eyes.
 
 ``--sub-ass-justify=<yes|no>``
     Applies justification as defined by ``--sub-justify`` on ASS subtitles
@@ -3679,7 +3687,7 @@ Window
 ``--force-window-position``
     Forcefully move mpv's video output window to default location whenever
     there is a change in video parameters, video stream or file. This used to
-    be the default behavior. Currently only affects X11, macvk and SDL VOs.
+    be the default behavior. Currently only affects Windows, X11, macvk and SDL VOs.
 
 ``--auto-window-resize=<yes|no>``
     By default, mpv will automatically resize itself if the video's size changes
@@ -4817,6 +4825,16 @@ OSD
     This option specifies the vertical margins of the OSD.
 
     Default: 16
+
+``--osd-margin-y-offset=<size>``
+    Additional vertical offset added to the OSD margin, in scaled pixels.
+    This is added on top of ``--osd-margin-y``.
+
+    This is intended for dynamic margin adjustments at runtime (e.g. by
+    scripts like the OSC to avoid OSD/UI overlap). For persistent settings,
+    use ``--osd-margin-y`` instead.
+
+    Default: 0
 
 ``--osd-align-x=<left|center|right>``
     Control to which corner of the screen OSD should be
@@ -6257,9 +6275,8 @@ them.
 
     .. note::
 
-        For ``--vo=gpu-next``, ``rgba16f`` enables scRGB output. However, it is
-        not currently fully supported. Colors may appear darker than expected,
-        and HDR output is not supported.
+        For ``--vo=gpu-next``, ``rgba16f`` enables scRGB output. Alternatively,
+        ``--target-trc=scrgb`` can be used to request scRGB output.
 
 ``--d3d11-output-csp=<auto|srgb|linear|pq|bt.2020>``
     Select a specific D3D11 output color space to utilize for D3D11 rendering.
@@ -7273,6 +7290,12 @@ them.
         Sony S-Log1 curve
     s-log2
         Sony S-Log2 curve
+    scrgb
+        scRGB, extended linear light transfer. Supports both HDR
+        and wide color gamut content. The output gamut defaults to BT.709
+        unless display primaries are reported by the system. You can also use
+        ``--target-gamut`` to manually specify a wider gamut.
+        (``--vo=gpu-next`` only)
 
     .. note::
 
