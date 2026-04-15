@@ -538,7 +538,8 @@ static int parse_dir(struct pl_parser *p)
     struct stream *stream = p->real_stream;
     enum autocreate_mode autocreate = AUTO_NONE;
     p->pl->playlist_dir = NULL;
-    if (p->autocreate_playlist && p->real_stream->is_local_fs && !p->real_stream->is_directory) {
+    if (p->autocreate_playlist && p->real_stream->is_local_fs && p->real_stream->is_regular &&
+        !p->real_stream->is_directory) {
         bstr ext = bstr_get_ext(bstr0(p->real_stream->url));
         switch (p->autocreate_playlist) {
         case 1: // filter
@@ -585,11 +586,8 @@ static int parse_dir(struct pl_parser *p)
 
     struct stat dir_stack[MAX_DIR_STACK];
 
-    if (p->opts->dir_mode == DIR_AUTO) {
-        struct MPOpts *opts = mp_get_config_group(NULL, p->global, &mp_opt_root);
-        p->opts->dir_mode = opts->shuffle ? DIR_RECURSIVE : DIR_LAZY;
-        talloc_free(opts);
-    }
+    if (p->opts->dir_mode == DIR_AUTO)
+        p->opts->dir_mode = p->mp_opts->shuffle ? DIR_RECURSIVE : DIR_LAZY;
 
     scan_dir(p, path, dir_stack, 0, autocreate);
 

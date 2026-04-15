@@ -61,8 +61,7 @@ that uses the ``.foo`` file extension.
 mpv also appends the top level directory of the script to the start of Lua's
 package path so you can import scripts from there too. Be aware that this will
 shadow Lua libraries that use the same package path. (Single file scripts do not
-include mpv specific directories in the Lua package path. This was silently
-changed in mpv 0.32.0.)
+include mpv specific directories in the Lua package path.)
 
 Using a script directory is the recommended way to package a script that
 consists of multiple source files, or requires other files (you can use
@@ -100,17 +99,14 @@ The event loop will wait for events and dispatch events registered with
 ``mp.register_event``. It will also handle timers added with ``mp.add_timeout``
 and similar (by waiting with a timeout).
 
-Since mpv 0.6.0, the player will wait until the script is fully loaded before
-continuing normal operation. The player considers a script as fully loaded as
-soon as it starts waiting for mpv events (or it exits). In practice this means
-the player will more or less hang until the script returns from the main chunk
-(and ``mp_event_loop`` is called), or the script calls ``mp_event_loop`` or
+The player will wait until the script is fully loaded before continuing normal
+operation. The player considers a script as fully loaded as soon as it starts
+waiting for mpv events (or it exits). In practice this means the player will
+more or less hang until the script returns from the main chunk (and
+``mp_event_loop`` is called), or the script calls ``mp_event_loop`` or
 ``mp.dispatch_events`` directly. This is done to make it possible for a script
-to fully setup event handlers etc. before playback actually starts. In older
-mpv versions, this happened asynchronously. With mpv 0.29.0, this changes
-slightly, and it merely waits for scripts to be loaded in this manner before
-starting playback as part of the player initialization phase. Scripts run though
-initialization in parallel. This might change again.
+to fully setup event handlers etc. before playback actually starts. Scripts run
+though initialization in parallel.
 
 mp functions
 ------------
@@ -159,11 +155,14 @@ The ``mp`` module is preloaded, although it can be loaded manually with
     ``mp.commandv()`` (but can be a native type instead of a string).
 
     If the table contains string keys, it's interpreted as command with named
-    arguments. This requires at least an entry with the key ``name`` to be
-    present, which must be a string, and contains the command name. The special
-    entry ``_flags`` is optional, and if present, must be an array of
-    `Input Command Prefixes`_ to apply. All other entries are interpreted as
-    arguments.
+    arguments. This requires at least an entry with the key ``_name`` to be
+    present, which must be a string, and contains the command name.
+    For compatibility, if the key ``_name`` does not exist, then the entry with
+    the key ``name`` will be used instead. The special entry ``_flags`` is
+    optional, and if present, must be an array of `Input Command Prefixes`_ to
+    apply. All other entries are interpreted as arguments. Note that some
+    commands have arguments named ``name``, and can only be used if the command
+    name is specified with key ``_name`` instead of ``name``.
 
     Returns a result table on success (usually empty), or ``def, error`` on
     error. ``def`` is the second parameter provided to the function, and is
@@ -850,7 +849,7 @@ strictly part of the guaranteed API.
     - rename ``cancellable`` field to ``playback_only``
     - rename ``max_size`` to ``capture_size``
     - set ``capture_stdout`` field to ``true`` if unset
-    - set ``name`` field to ``subprocess``
+    - set ``_name`` field to ``subprocess``
     - call ``mp.command_native(copied_t)``
     - if the command failed, create a dummy result table
     - copy ``error_string`` to ``error`` field if the string is non-empty

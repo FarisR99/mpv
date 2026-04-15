@@ -544,6 +544,38 @@ static int mp_property_filename(void *ctx, struct m_property *prop,
     return r;
 }
 
+static int mp_property_env(void *ctx, struct m_property *prop,
+                           int action, void *arg)
+{
+    switch (action) {
+    case M_PROPERTY_GET_TYPE:
+        *(struct m_option *)arg = (struct m_option){.type = CONF_TYPE_NODE};
+        return M_PROPERTY_OK;
+    case M_PROPERTY_GET:
+    case M_PROPERTY_GET_NODE: {
+        struct mpv_node node;
+        node_init(&node, MPV_FORMAT_NODE_MAP, NULL);
+        for (char **env = environ; env && *env; env++) {
+            char *sep = strchr(*env, '=');
+            if (!sep)
+                continue;
+            bstr key = { .start = *env, .len = sep - *env };
+            struct mpv_node *np = node_map_badd(&node, key, MPV_FORMAT_NONE);
+            np->format = MPV_FORMAT_STRING;
+            np->u.string = talloc_strdup(node.u.list, sep + 1);
+        }
+        *(struct mpv_node *)arg = node;
+        return M_PROPERTY_OK;
+    }
+    case M_PROPERTY_KEY_ACTION: {
+        struct m_property_action_arg *ka = arg;
+        char *val = getenv(ka->key);
+        return m_property_strdup_ro(ka->action, ka->arg, val);
+    }
+    }
+    return M_PROPERTY_NOT_IMPLEMENTED;
+}
+
 static int mp_property_stream_open_filename(void *ctx, struct m_property *prop,
                                             int action, void *arg)
 {
@@ -818,13 +850,6 @@ static int mp_property_percent_pos(void *ctx, struct m_property *prop,
     }
     }
     return M_PROPERTY_NOT_IMPLEMENTED;
-}
-
-static int mp_property_time_start(void *ctx, struct m_property *prop,
-                                  int action, void *arg)
-{
-    // minor backwards-compat.
-    return property_time(action, arg, 0);
 }
 
 /// Current position in seconds (RW)
@@ -1165,8 +1190,8 @@ static int get_edition_entry(int item, int action, void *arg, void *ctx)
     return m_property_read_sub(props, action, arg);
 }
 
-static int property_list_editions(void *ctx, struct m_property *prop,
-                                  int action, void *arg)
+static int mp_property_list_editions(void *ctx, struct m_property *prop,
+                                     int action, void *arg)
 {
     MPContext *mpctx = ctx;
     struct demuxer *demuxer = mpctx->demuxer;
@@ -1282,7 +1307,7 @@ static int tag_property(int action, void *arg, struct mp_tags *tags)
     case M_PROPERTY_KEY_ACTION: {
         struct m_property_action_arg *ka = arg;
         bstr key;
-        char *rem;
+        const char *rem;
         m_property_split_path(ka->key, &key, &rem);
         if (bstr_equals0(key, "list")) {
             struct m_property_action_arg nka = *ka;
@@ -1352,7 +1377,7 @@ static int mp_property_filter_metadata(void *ctx, struct m_property *prop,
     if (action == M_PROPERTY_KEY_ACTION) {
         struct m_property_action_arg *ka = arg;
         bstr key;
-        char *rem;
+        const char *rem;
         m_property_split_path(ka->key, &key, &rem);
         struct mp_tags *metadata = NULL;
         struct mp_output_chain *chain = NULL;
@@ -1846,6 +1871,10 @@ static int mp_property_audio_devices(void *ctx, struct m_property *prop,
     struct command_ctx *cmd = mpctx->command_ctx;
     create_hotplug(mpctx);
 
+    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
+    if (valid != M_PROPERTY_VALID)
+        return valid;
+
     struct ao_device_list *list = ao_hotplug_get_device_list(cmd->hotplug, mpctx->ao);
     return m_property_read_list(action, arg, list->num_devices,
                                 get_device_entry, list);
@@ -1893,6 +1922,11 @@ static int mp_property_audio_params(void *ctx, struct m_property *prop,
                                     int action, void *arg)
 {
     MPContext *mpctx = ctx;
+
+    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
+    if (valid != M_PROPERTY_VALID)
+        return valid;
+
     return property_audiofmt(mpctx->ao_chain ?
         mpctx->ao_chain->filter->input_aformat : NULL, action, arg);
 }
@@ -1901,6 +1935,11 @@ static int mp_property_audio_out_params(void *ctx, struct m_property *prop,
                                         int action, void *arg)
 {
     MPContext *mpctx = ctx;
+
+    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
+    if (valid != M_PROPERTY_VALID)
+        return valid;
+
     struct mp_aframe *frame = NULL;
     if (mpctx->ao) {
         frame = mp_aframe_create();
@@ -2115,7 +2154,7 @@ static int get_track_entry(int item, int action, void *arg, void *ctx)
         struct m_property_action_arg *ka = arg;
         if (!strncmp(ka->key, "metadata/", 9)) {
             bstr key = {0};
-            char *rem = "";
+            const char *rem = "";
             m_property_split_path(ka->key, &key, &rem);
             ka->key = rem;
             if (!rem[0]) {
@@ -2253,7 +2292,7 @@ static int mp_property_current_tracks(void *ctx, struct m_property *prop,
 
     struct m_property_action_arg *ka = arg;
     bstr key;
-    char *rem;
+    const char *rem;
     m_property_split_path(ka->key, &key, &rem);
 
     if (bstr_equals0(key, "video")) {
@@ -2422,16 +2461,9 @@ static int property_imgparams(const struct mp_image_params *p, int action, void 
         for (int i = 0; i < desc.num_planes; i++)
             bpp += desc.bpp[i] >> (desc.xs[i] + desc.ys[i]);
 
-#if PL_API_VER >= 344
         // If PL_ALPHA_NONE is supported, use it directly, unless in auto mode.
         if ((desc.flags & MP_IMGFLAG_ALPHA) && alpha == PL_ALPHA_UNKNOWN)
             alpha = PL_ALPHA_INDEPENDENT;
-#else
-        // Alpha type is not supported by FFmpeg, so PL_ALPHA_UNKNOWN may mean alpha
-        // is of an unknown type, or simply not present. Normalize to AUTO=no alpha.
-        if (!!(desc.flags & MP_IMGFLAG_ALPHA) != (alpha != PL_ALPHA_UNKNOWN))
-            alpha = (desc.flags & MP_IMGFLAG_ALPHA) ? PL_ALPHA_INDEPENDENT : PL_ALPHA_UNKNOWN;
-#endif
     }
 
     const struct pl_hdr_metadata *hdr = &p->color.hdr;
@@ -2601,6 +2633,11 @@ static int mp_property_vd_imgparams(void *ctx, struct m_property *prop,
     struct vo_chain *vo_c = mpctx->vo_chain;
     if (!vo_c)
         return M_PROPERTY_UNAVAILABLE;
+
+    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
+    if (valid != M_PROPERTY_VALID)
+        return valid;
+
     struct track *track = mpctx->current_track[0][STREAM_VIDEO];
     struct mp_codec_params *c =
         track && track->stream ? track->stream->codec : NULL;
@@ -3016,6 +3053,11 @@ static int mp_property_osd_dim(void *ctx, struct m_property *prop,
                                int action, void *arg)
 {
     MPContext *mpctx = ctx;
+
+    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
+    if (valid != M_PROPERTY_VALID)
+        return valid;
+
     struct mp_osd_res vo_res = osd_get_vo_res(mpctx->osd);
 
     if (!mpctx->video_out || !mpctx->video_out->config_ok)
@@ -3087,27 +3129,20 @@ static int mp_property_mouse_pos(void *ctx, struct m_property *prop,
 {
     MPContext *mpctx = ctx;
 
-    switch (action) {
-    case M_PROPERTY_GET_TYPE:
-        *(struct m_option *)arg = (struct m_option){.type = CONF_TYPE_NODE};
-        return M_PROPERTY_OK;
+    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
+    if (valid != M_PROPERTY_VALID)
+        return valid;
 
-    case M_PROPERTY_GET: {
-        struct mpv_node node;
-        int x, y, hover;
-        mp_input_get_mouse_pos(mpctx->input, &x, &y, &hover);
+    int x, y, hover;
+    mp_input_get_mouse_pos(mpctx->input, &x, &y, &hover);
+    struct m_sub_property props[] = {
+        {"x",      SUB_PROP_INT64(x)},
+        {"y",      SUB_PROP_INT64(y)},
+        {"hover",  SUB_PROP_BOOL(!!hover)},
+        {0}
+    };
 
-        node_init(&node, MPV_FORMAT_NODE_MAP, NULL);
-        node_map_add_int64(&node, "x", x);
-        node_map_add_int64(&node, "y", y);
-        node_map_add_flag(&node, "hover", hover);
-        *(struct mpv_node *)arg = node;
-
-        return M_PROPERTY_OK;
-    }
-    }
-
-    return M_PROPERTY_NOT_IMPLEMENTED;
+    return m_property_read_sub(props, action, arg);
 }
 
 static int get_touch_pos(int item, int action, void *arg, void *ctx)
@@ -3129,6 +3164,11 @@ static int mp_property_touch_pos(void *ctx, struct m_property *prop,
                                  int action, void *arg)
 {
     MPContext *mpctx = ctx;
+
+    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
+    if (valid != M_PROPERTY_VALID)
+        return valid;
+
     int xs[MAX_TOUCH_POINTS], ys[MAX_TOUCH_POINTS], ids[MAX_TOUCH_POINTS];
     int count = mp_input_get_touch_pos(mpctx->input, MAX_TOUCH_POINTS, xs, ys, ids);
     const int *pos[3] = {xs, ys, ids};
@@ -3154,11 +3194,11 @@ static int mp_property_tablet_pos(void *ctx, struct m_property *prop,
         bool tool_stylus_btn2_pressed;
         bool tool_stylus_btn3_pressed;
         bool pad_focus;
-        bool *pad_buttons_pressed;
+        bool pad_buttons_pressed[MP_MAX_TABLET_PAD_BUTTONS];
         int pad_buttons;
         mp_input_get_tablet_pos(mpctx->input, &xs, &ys, &tool_in_proximity, &tool_down,
             &tool_stylus_btn1_pressed, &tool_stylus_btn2_pressed, &tool_stylus_btn3_pressed,
-            &pad_focus, &pad_buttons_pressed, &pad_buttons);
+            &pad_focus, pad_buttons_pressed, &pad_buttons);
 
         struct mpv_node node;
         node_init(&node, MPV_FORMAT_NODE_MAP, NULL);
@@ -3505,11 +3545,11 @@ static int mp_property_playlist(void *ctx, struct m_property *prop,
             if (pl->current == e)
                 res = append_selected_style(mpctx, res);
             const char *reset = pl->current == e ? get_style_reset(mpctx) : "";
-            char *p = e->title;
+            const char *p = e->title;
             if (!p || mpctx->opts->playlist_entry_name > 0) {
                 p = e->filename;
                 if (!mp_is_url(bstr0(p))) {
-                    char *s = mp_basename(e->filename);
+                    const char *s = mp_basename(e->filename);
                     if (s[0])
                         p = s;
                 }
@@ -3696,6 +3736,10 @@ static int get_decoder_entry(int item, int action, void *arg, void *ctx)
 static int mp_property_decoders(void *ctx, struct m_property *prop,
                                 int action, void *arg)
 {
+    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
+    if (valid != M_PROPERTY_VALID)
+        return valid;
+
     struct mp_decoder_list *codecs = talloc_zero(NULL, struct mp_decoder_list);
     struct mp_decoder_list *v = talloc_steal(codecs, video_decoder_list());
     struct mp_decoder_list *a = talloc_steal(codecs, audio_decoder_list());
@@ -3710,6 +3754,10 @@ static int mp_property_decoders(void *ctx, struct m_property *prop,
 static int mp_property_encoders(void *ctx, struct m_property *prop,
                                 int action, void *arg)
 {
+    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
+    if (valid != M_PROPERTY_VALID)
+        return valid;
+
     struct mp_decoder_list *codecs = talloc_zero(NULL, struct mp_decoder_list);
     mp_add_lavc_encoders(codecs);
     int r = m_property_read_list(action, arg, codecs->num_entries,
@@ -3874,7 +3922,7 @@ static int mp_property_option_info(void *ctx, struct m_property *prop,
     case M_PROPERTY_KEY_ACTION: {
         struct m_property_action_arg *ka = arg;
         bstr key;
-        char *rem;
+        const char *rem;
         m_property_split_path(ka->key, &key, &rem);
         struct m_config_option *co = m_config_get_co(mpctx->mconfig, key);
         if (!co)
@@ -4010,6 +4058,29 @@ static int mp_property_commands(void *ctx, struct m_property *prop,
                 node_map_add_string(ae, "name", a->name);
                 node_map_add_string(ae, "type", a->type->name);
                 node_map_add_flag(ae, "optional", a->flags & MP_CMD_OPT_ARG);
+                if (a->type == &m_option_type_choice ||
+                    a->type == &m_option_type_flags) {
+                    const struct m_opt_choice_alternatives *alt = a->priv;
+                    if (alt) {
+                        if (a->defval) {
+                            const int ival = *(const int *)a->defval;
+                            const char *val = m_opt_choice_str_def(alt, ival, NULL);
+                            if (val)
+                                node_map_add_string(ae, "default-value", val);
+                        }
+                        struct mpv_node *choices =
+                            node_map_add(ae, "choices", MPV_FORMAT_NODE_ARRAY);
+                        for (int j = 0; alt[j].name; j++) {
+                           struct mpv_node *ce = node_array_add(choices, MPV_FORMAT_NONE);
+                           ce->format = MPV_FORMAT_STRING;
+                           ce->u.string = talloc_strdup(choices->u.list, alt[j].name);
+                        }
+                    }
+                } else if (a->defval) {
+                    struct mpv_node *def =
+                        node_map_add(ae, "default-value", MPV_FORMAT_NONE);
+                    m_option_get_node(a, ae->u.list, def, (void *)a->defval);
+                }
             }
 
             node_map_add_flag(entry, "vararg", cmd->vararg);
@@ -4134,7 +4205,7 @@ static int do_op_udata(struct udata_ctx* ctx, int action, void *arg)
 
         // See if the next layer down will also be a sub-object access
         bstr key;
-        char *rem;
+        const char *rem;
         bool has_split = m_property_split_path(act->key, &key, &rem);
 
         if (!has_split && act->action == M_PROPERTY_DELETE) {
@@ -4387,6 +4458,7 @@ static const struct m_property mp_properties_base[] = {
     {"video-speed-correction", mp_property_av_speed_correction, .priv = "v"},
     {"display-sync-active", mp_property_display_sync_active},
     {"filename", mp_property_filename},
+    {"env", mp_property_env},
     {"stream-open-filename", mp_property_stream_open_filename},
     {"file-size", mp_property_file_size},
     {"path", mp_property_path},
@@ -4407,7 +4479,6 @@ static const struct m_property mp_properties_base[] = {
     {"frame-drop-count", mp_property_frame_drop_vo},
     {"vo-delayed-frame-count", mp_property_vo_delayed_frame_count},
     {"percent-pos", mp_property_percent_pos},
-    {"time-start", mp_property_time_start},
     {"time-pos", mp_property_time_pos},
     {"time-remaining", mp_property_remaining},
     {"audio-pts", mp_property_audio_pts},
@@ -4449,7 +4520,7 @@ static const struct m_property mp_properties_base[] = {
     {"chapter-list", mp_property_list_chapters},
     {"track-list", mp_property_list_tracks},
     {"current-tracks", mp_property_current_tracks},
-    {"edition-list", property_list_editions},
+    {"edition-list", mp_property_list_editions},
 
     {"playlist", mp_property_playlist},
     {"playlist-path", mp_property_playlist_path},
@@ -7158,6 +7229,20 @@ static void cmd_begin_vo_dragging(void *p)
         vo_control(vo, VOCTRL_BEGIN_DRAGGING, NULL);
 }
 
+static void cmd_update_clipboard(void *p)
+{
+    struct mp_cmd_ctx *cmd = p;
+    struct MPContext *mpctx = cmd->mpctx;
+    struct clipboard_access_params params = {.target = cmd->args[0].v.i};
+    double timeout = cmd->args[1].v.i / 1000.0;
+    bool success = false;
+
+    mp_core_unlock(mpctx);
+    success = mp_clipboard_update_data(mpctx->clipboard, &params, cmd->abort->cancel, timeout);
+    mp_core_lock(mpctx);
+    cmd->success = success;
+}
+
 static void cmd_context_menu(void *p)
 {
     struct mp_cmd_ctx *cmd = p;
@@ -7711,6 +7796,16 @@ const struct mp_cmd_def mp_cmds[] = {
     { "ab-loop-align-cache", cmd_align_cache_ab },
 
     { "begin-vo-dragging", cmd_begin_vo_dragging },
+
+    { "update-clipboard", cmd_update_clipboard,
+        { {"type", OPT_CHOICE(v.i,
+              {"text", CLIPBOARD_TARGET_CLIPBOARD},
+              {"text-primary", CLIPBOARD_TARGET_PRIMARY_SELECTION})},
+          {"timeout", OPT_INT(v.i), OPTDEF_INT(10)},
+          },
+        .spawn_thread = true,
+        .can_abort = true,
+    },
 
     { "context-menu", cmd_context_menu },
 

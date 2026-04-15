@@ -52,9 +52,7 @@ local user_opts = {
     sub_margins = false,        -- adjust sub-margin-y to not overlap with OSC
     osd_margins = true,         -- adjust osd-margin-y to not overlap with OSC
     windowcontrols = "auto",    -- whether to show window controls
-    windowcontrols_fullscreen = false, -- show window controls in fullscreen
     windowcontrols_alignment = "right", -- which side to show window controls on
-    windowcontrols_title = "${media-title}", -- same as title but for windowcontrols
     windowcontrols_independent = true, -- show window controls and bottom bar independently
     floatingtitle = true,         -- show title in the floating layout?
     floatingwidth = 700,          -- width of the floating layout
@@ -316,7 +314,6 @@ local state = {
     input_enabled = true,
     showhide_enabled = false,
     windowcontrols_buttons = false,
-    windowcontrols_title = false,
     dmx_cache = 0,
     using_video_margins = false,
     border = true,
@@ -720,10 +717,7 @@ end
 local function window_controls_enabled()
     local val = user_opts.windowcontrols
     if val == "auto" then
-        if state.fullscreen then
-            return user_opts.windowcontrols_fullscreen
-        end
-        return not state.border or not state.title_bar
+        return not (state.border and state.title_bar)
     else
         return val ~= "no"
     end
@@ -1333,11 +1327,11 @@ local function window_controls(topbar)
 
     local button_y = wc_geo.y - (wc_geo.h / 2)
     local first_geo =
-        {x = controlbox_left + 5, y = button_y, an = 4, w = 25, h = 25}
+        {x = controlbox_left + 5, y = button_y, an = 4, w = 25, h = wc_geo.h}
     local second_geo =
-        {x = controlbox_left + 30, y = button_y, an = 4, w = 25, h = 25}
+        {x = controlbox_left + 30, y = button_y, an = 4, w = 25, h = wc_geo.h}
     local third_geo =
-        {x = controlbox_left + 55, y = button_y, an = 4, w = 25, h = 25}
+        {x = controlbox_left + 55, y = button_y, an = 4, w = 25, h = wc_geo.h}
 
     -- Window control buttons use symbols in the custom mpv osd font
     -- because the official unicode codepoints are sufficiently
@@ -1406,7 +1400,7 @@ local function window_controls(topbar)
     ne = new_element("wctitle", "button")
     ne.is_wc = true
     ne.content = function ()
-        local title = mp.command_native({"expand-text", user_opts.windowcontrols_title})
+        local title = mp.command_native({"expand-text", mp.get_property("title")})
         title = title:gsub("\n", " ")
         return title ~= "" and mp.command_native({"escape-ass", title}) or "mpv"
     end
@@ -1725,7 +1719,6 @@ local function bar_layout(direction, slim)
     }
 
     local padX = 9
-    local padY = 3
     local buttonW = 27
     local tcW = (state.tc_ms) and 170 or 110
     if user_opts.tcspace >= 50 and user_opts.tcspace <= 200 then
@@ -1767,8 +1760,8 @@ local function bar_layout(direction, slim)
         osc_param.video_margins.t = osc_geo.h / osc_param.playresy
     end
 
-    local line1 = osc_geo.y - direction * (9 + padY)
-    local line2 = osc_geo.y - direction * (36 + padY)
+    local line1 = osc_geo.y - direction * 12
+    local line2 = osc_geo.y - direction * 39
 
     osc_param.areas = {}
 
@@ -1801,7 +1794,7 @@ local function bar_layout(direction, slim)
 
 
     -- Menu
-    geo = { x = osc_geo.x + padX + 4, y = line1, an = 4, w = 18, h = 18 - padY }
+    geo = { x = osc_geo.x + padX + 4, y = line1, an = 4, w = 18, h = math.abs(line2 - line1) }
     lo = add_layout("menu")
     lo.geometry = geo
     lo.style = osc_styles.topButtonsBar
@@ -1864,7 +1857,7 @@ local function bar_layout(direction, slim)
 
     -- Playback control buttons
     geo = { x = osc_geo.x + padX + padwc_l, y = line2, an = 4,
-            w = buttonW, h = 36 - padY*2}
+            w = buttonW, h = osc_geo.h - math.abs(line2 - line1)}
     lo = add_layout("play_pause")
     lo.geometry = geo
     lo.style = osc_styles.smallButtonsBar
@@ -2042,13 +2035,12 @@ layouts["floating"] = function ()
     -- Title row (optional)
     if show_title then
         lo = add_layout("title")
-        local title_reserved = 160
         lo.geometry = {x = x - half_w, y = tile_pos, an = 4,
-            w = half_w * 2 - title_reserved, h = title_h}
+            w = half_w * 2, h = title_h}
         lo.style = string.format("%s{\\clip(%f,%f,%f,%f)}",
             osc_styles.vidtitle,
-            x - half_w, tile_pos - title_h, x + half_w - title_reserved, tile_pos + title_h)
-        lo.button.maxchars = user_opts.boxmaxchars
+            x - half_w, tile_pos - title_h, x + half_w, tile_pos + title_h)
+        lo.button.maxchars = 105
     end
 
     -- Seekbar row
@@ -2635,6 +2627,7 @@ local function show_bar(label, showtime_key, visible_key, anitype_key, set_visib
 end
 
 local function show_osc()
+    if state.idle then return end
     show_bar("osc", "showtime", "osc_visible", "anitype", osc_visible)
 end
 
@@ -3010,17 +3003,25 @@ tick = function()
     if not state.enabled then return end
 
     if state.idle then
-        render_wipe(state.osd)
         -- render idle message
         msg.trace("idle message")
         if user_opts.idlescreen then
             render_logo()
         end
 
-        if state.showhide_enabled then
-            mp.disable_key_bindings("showhide")
-            mp.disable_key_bindings("showhide_wc")
-            state.showhide_enabled = false
+        -- Hide main OSC but keep window controls functional
+        if state.osc_visible then
+            osc_visible(false)
+        end
+        if window_controls_enabled() then
+            render()
+        else
+            render_wipe(state.osd)
+            if state.showhide_enabled then
+                mp.disable_key_bindings("showhide")
+                mp.disable_key_bindings("showhide_wc")
+                state.showhide_enabled = false
+            end
         end
     elseif state.fullscreen and user_opts.showfullscreen
         or (not state.fullscreen and user_opts.showwindowed) then
@@ -3040,11 +3041,11 @@ tick = function()
 
     state.tick_last_time = mp.get_time()
 
-    local function tick_animation(anitype_key, anistart_key, animation_key)
+    local function tick_animation(anitype_key, anistart_key, animation_key, allow_idle)
         -- state.anistart can be nil - animation should now start, or it can
         -- be a timestamp when it started. state.idle has no animation.
         if state[anitype_key] ~= nil then
-            if not state.idle and
+            if (allow_idle or not state.idle) and
                (not state[anistart_key] or
                 mp.get_time() < 1 + state[anistart_key] + user_opts.fadeduration/1000)
             then
@@ -3056,7 +3057,7 @@ tick = function()
         end
     end
     tick_animation("anitype", "anistart", "animation")
-    tick_animation("wc_anitype", "wc_anistart", "wc_animation")
+    tick_animation("wc_anitype", "wc_anistart", "wc_animation", window_controls_enabled())
 end
 
 local function shutdown()

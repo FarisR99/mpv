@@ -2220,13 +2220,15 @@ static bool parse_geometry_str(struct m_geometry *gm, bstr s)
 
     if (bstrchr(s, ':') < 0) {
         gm->wh_valid = true;
-        if (!bstr_startswith0(s, "+") && !bstr_startswith0(s, "-")) {
+        if (!bstr_startswith0(s, "+") && !bstr_startswith0(s, "-") &&
+            !bstr_startswith0(s, "/"))
+        {
             if (!bstr_startswith0(s, "x"))
                 READ_NUM(w, w_per);
             if (bstr_eatstart0(&s, "x"))
                 READ_NUM(h, h_per);
         }
-        if (s.len > 0) {
+        if (s.len > 0 && !bstr_startswith0(s, "/")) {
             gm->xy_valid = true;
             READ_SIGN(x_sign);
             READ_NUM(x, x_per);
@@ -2305,9 +2307,9 @@ void m_geometry_apply(int *xpos, int *ypos, int *widw, int *widh,
         // keep aspect if the other value is not set
         double asp = (double)prew / preh;
         if (gm->w > 0 && !(gm->h > 0)) {
-            *widh = *widw / asp;
+            *widh = MPMAX(*widw / asp, 1);
         } else if (!(gm->w > 0) && gm->h > 0) {
-            *widw = *widh * asp;
+            *widw = MPMAX(*widh * asp, 1);
         }
         if (center) {
             *xpos += prew / 2 - *widw / 2;
@@ -2355,7 +2357,7 @@ exit:
                BSTR_P(name), BSTR_P(param));
     }
     mp_info(log,
-         "Valid format: [W[%%][xH[%%]]][{+-}X[%%]{+-}Y[%%]] | [X[%%]:Y[%%]]\n");
+         "Valid format: [W[%%][xH[%%]]][{+-}X[%%]{+-}Y[%%]][/WS] | [X[%%]:Y[%%]]\n");
     return is_help ? M_OPT_EXIT : M_OPT_INVALID;
 }
 
