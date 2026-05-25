@@ -61,6 +61,7 @@ extern const struct m_sub_options tv_params_conf;
 extern const struct m_sub_options stream_bluray_conf;
 extern const struct m_sub_options stream_cdda_conf;
 extern const struct m_sub_options stream_dvb_conf;
+extern const struct m_sub_options mp_network_conf;
 extern const struct m_sub_options stream_lavf_conf;
 extern const struct m_sub_options sws_conf;
 extern const struct m_sub_options zimg_conf;
@@ -94,6 +95,7 @@ extern const struct m_sub_options ao_conf;
 
 extern const struct m_sub_options dvd_conf;
 extern const struct m_sub_options clipboard_conf;
+extern const struct m_sub_options curl_conf;
 
 extern const struct m_sub_options opengl_conf;
 extern const struct m_sub_options vulkan_conf;
@@ -220,6 +222,7 @@ static const m_option_t mp_vo_opt_list[] = {
     {"wayland-edge-pixels-touch", OPT_INT(wl_edge_pixels_touch),
         M_RANGE(0, INT_MAX)},
     {"wayland-present", OPT_BOOL(wl_present)},
+    {"wayland-session", OPT_STRING(wayland_session)},
 #endif
 #if HAVE_WIN32_DESKTOP
 // For old MinGW-w64 compatibility
@@ -586,6 +589,8 @@ static const m_option_t mp_opts[] = {
     {"dvd", OPT_SUBSTRUCT(dvd_opts, dvd_conf)},
 #endif
     {"edition", OPT_CHOICE(edition_id, {"auto", -1}), M_RANGE(0, 8190)},
+    {"flatten-editions", OPT_BOOL(flatten_editions)},
+    {"show-dependent-tracks", OPT_BOOL(show_dependent_tracks)},
 #if HAVE_LIBBLURAY
     {"bluray", OPT_SUBSTRUCT(stream_bluray_opts, stream_bluray_conf)},
 #endif /* HAVE_LIBBLURAY */
@@ -669,6 +674,7 @@ static const m_option_t mp_opts[] = {
 #if HAVE_DVBIN
     {"dvbin", OPT_SUBSTRUCT(stream_dvb_opts, stream_dvb_conf)},
 #endif
+    {"", OPT_SUBSTRUCT(network_opts, mp_network_conf)},
     {"", OPT_SUBSTRUCT(stream_lavf_opts, stream_lavf_conf)},
 
 // ------------------------- a-v sync options --------------------
@@ -728,7 +734,7 @@ static const m_option_t mp_opts[] = {
 
     {"sub-auto", OPT_CHOICE(sub_auto,
         {"no", -1}, {"exact", 0}, {"fuzzy", 1}, {"all", 2})},
-    {"sub-auto-exts", OPT_STRINGLIST(sub_auto_exts), .flags = UPDATE_SUB_EXTS},
+    {"sub-auto-exts", OPT_STRINGLIST(sub_auto_exts)},
     {"audio-file-auto", OPT_CHOICE(audiofile_auto,
         {"no", -1}, {"exact", 0}, {"fuzzy", 1}, {"all", 2})},
     {"audio-exts", OPT_STRINGLIST(audio_exts)},
@@ -917,8 +923,13 @@ static const m_option_t mp_opts[] = {
     {"", OPT_SUBSTRUCT(resample_opts, resample_conf)},
 
     {"", OPT_SUBSTRUCT(input_opts, input_config)},
+    {"input-builtin-drag-and-drop", OPT_BOOL(builtin_dnd)},
 
     {"clipboard", OPT_SUBSTRUCT(clipboard_opts, clipboard_conf)},
+
+#if HAVE_LIBCURL
+    {"curl", OPT_SUBSTRUCT(curl_opts, curl_conf)},
+#endif
 
     {"", OPT_SUBSTRUCT(vo, vo_sub_opts)},
     {"", OPT_SUBSTRUCT(demux_opts, demux_conf)},
@@ -1073,6 +1084,7 @@ static const struct MPOpts mp_default_opts = {
     .screenshot_template = "mpv-shot%n",
     .play_dir = 1,
     .media_controls = true,
+    .builtin_dnd = true,
     .video_exts = (char *[]){
         "3g2", "3gp", "avi", "flv", "ivf", "m2ts", "m4v", "mj2", "mkv", "mov",
         "mp4", "mpeg", "mpg", "mxf", "ogv", "rmvb", "ts", "webm", "wmv", "y4m",
@@ -1091,7 +1103,7 @@ static const struct MPOpts mp_default_opts = {
         "zip", "rar", "7z", "cbz", "cbr", NULL
     },
     .playlist_exts = (char *[]){
-        "cue", "edl", "m3u", "m3u8", "pls", NULL
+        "cue", "edl", "m3u", "m3u8", "pls", "strm", NULL
     },
 
     .sub_auto_exts = (char *[]){

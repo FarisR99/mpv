@@ -120,6 +120,25 @@ Track Selection
     to ``auto`` (the default), mpv will choose the first edition declared as a
     default, or if there is no default, the first edition defined.
 
+``--flatten-editions=<yes|no>``
+    Some container formats (such as HLS or MPEG-TS with multiple programs)
+    expose multiple programs or rendition groups. By default, mpv respects the
+    format and groups tracks into editions, filtering the track list to only
+    show tracks belonging to the currently selected edition.
+
+    Setting this option to ``yes`` ignores the program structure of the file.
+    No editions are created, and all tracks from all programs are shown as a
+    flat list. Note that depending on the file, tracks from different programs
+    may be completely unrelated to each other.
+
+``--show-dependent-tracks=<yes|no>``
+    Show dependent tracks in the track list (default: no). Dependent tracks
+    carry coded data that is not independently decodable. For example, the
+    tile sub-streams that make up a tiled HEIF image, the raw coded layers of
+    an IAMF audio element, or the enhancement stream in an LCEVC group. They
+    are hidden by default because exposing them would clutter the track list
+    with entries that cannot be meaningfully selected on their own.
+
 ``--track-auto-selection=<yes|no>``
     Enable the default track auto-selection (default: yes). Enabling this will
     make the player select streams according to ``--aid``, ``--alang``, and
@@ -926,7 +945,7 @@ Program Behavior
 
     ``all_formats=<yes|no>``
         If 'yes' will attempt to add all formats found reported by youtube-dl
-        (default: no). Each format is added as a separate track. In addition,
+        (default: yes). Each format is added as a separate track. In addition,
         they are delay-loaded, and actually opened only when a track is selected
         (this should keep load times as low as without this option).
 
@@ -938,11 +957,6 @@ Program Behavior
         Tracks which represent formats that were selected by youtube-dl as
         default will have the default flag set. This means mpv should generally
         still select formats chosen with ``--ytdl-format`` by default.
-
-        Although this mechanism makes it possible to switch streams at runtime,
-        it's not suitable for this purpose for various technical reasons. (It's
-        slow, which can't be really fixed.) In general, this option is not
-        useful, and was only added to show that it's possible.
 
         There are two cases that must be considered when doing quality/bandwidth
         selection:
@@ -1334,8 +1348,8 @@ Video
         - If you're not sure, but want hardware decoding always enabled by
           default, put ``hwdec=yes`` into your ``mpv.conf``, and acknowledge that
           this may cause problems.
-        - If you want to test available hardware decoding methods, pass
-          ``--hwdec=auto --hwdec-codecs=all`` and look at the terminal output.
+        - If you want to test all available hardware decoding methods, pass
+          ``--hwdec=auto-unsafe --hwdec-codecs=all`` and look at the terminal output.
         - If you're a developer, or want to perform elaborate tests, you may
           need any of the other possible option values.
 
@@ -1828,8 +1842,8 @@ Video
     You can get the list of allowed codecs with ``mpv --vd=help``. Remove the
     prefix, e.g. instead of ``lavc:h264`` use ``h264``.
 
-    By default, this is set to ``h264,vc1,hevc,vp8,vp9,av1,prores,prores_raw,ffv1,dpx``. Note that
-    the hardware acceleration special codecs like ``h264_vdpau`` are not
+    By default, this is set to ``h264,vc1,hevc,vp8,vp9,av1,prores,prores_raw,ffv1,dpx,apv``.
+    Note that the hardware acceleration special codecs like ``h264_vdpau`` are not
     relevant anymore, and in fact have been removed from FFmpeg in this form.
 
     This is usually only needed with broken GPUs, where a codec is reported
@@ -2791,10 +2805,12 @@ Subtitles
     canvas size. Can be useful to test broken subtitles, which often happen
     when the video was transcoded, while attempting to keep the old subtitles.
 
-``--image-subs-hdr-peak=<sdr|video|10-10000>``
+``--image-subs-hdr-peak=<sdr|video|video-static|video-dynamic|10-10000>``
     Controls the image subtitle diffuse white level in cd/m² (nits) for HDR
-    output (default: sdr). ``sdr`` is 203 cd/m² for standard SDR white, while
-    ``video`` uses video metadata. (``--vo=gpu-next`` only)
+    videos (default: 1000). ``sdr`` is 203 cd/m² for standard SDR white,
+    ``video`` uses all video metadata including peak detection,
+    ``video-dynamic`` uses only per-scene video metadata,
+    ``video-static`` uses only static video metadata, (``--vo=gpu-next`` only)
 
     This also affects image subtitle brightness in HDR tone mapping with
     ``--blend-subtitles=<yes|video>``.
@@ -3448,13 +3464,12 @@ Window
     (Windows only) Snap the player window to screen edges.
 
 ``--drag-and-drop=<no|auto|replace|append|insert-next>``
-    Controls the default behavior of drag and drop on platforms that support
-    this. ``auto`` will obey what the underlying os/platform gives mpv.
-    Typically, holding shift during the drag and drop will append the item to
-    the playlist. Otherwise, it will completely replace it. ``replace``,
-    ``append``, and ``insert-next`` always force replacing, appending to, and
-    inserting next into the playlist respectively. ``no`` disables all drag and
-    drop behavior.
+    Controls the default built-in drag-and-drop behavior
+    (``--input-builtin-drag-and-drop``).
+    ``auto`` will obey the ``action`` value in ``dropped-files`` property.
+    ``replace``, ``append``, and ``insert-next`` always force replacing,
+    appending to, and inserting next into the playlist respectively.
+    ``no`` disables all drag and drop behavior.
 
 ``--ontop``
     Makes the player window stay on top of other windows.
@@ -3473,7 +3488,7 @@ Window
     :level:   A level as integer.
 
 ``--focus-on=<never|open|all>``,
-    (macOS only)
+    (X11 and macOS only)
     Focus the video window and make it the front most window on specific events (default: open).
 
     :never: Never focus the window on open or new file load events.
@@ -4319,6 +4334,19 @@ Demuxer
     The default value is 0 seconds, which disables the caching hysteresis. A
     value of 10 seconds probably works well for most usecases.
 
+``--demuxer-hysteresis-bytes=<bytesize>``
+    Same as ``--demuxer-hysteresis-secs``, but specifies the hysteresis in
+    bytes of forward buffered data instead of seconds. Once the demuxer limit
+    is reached, the demuxer will not buffer ahead again until the amount of
+    forward buffered data drops to this value.
+
+    This option is useful for streams with variable or unknown bitrate, where
+    a byte-based threshold is more meaningful than a time-based one. It can
+    also be combined with ``--demuxer-hysteresis-secs``. In that case buffering
+    can resume when either threshold is reached.
+
+    The default value is 0, which disables the byte-based caching hysteresis.
+
 ``--prefetch-playlist=<yes|no>``
     Prefetch next playlist entry while playback of the current entry is ending
     (default: no). This merely opens the URL of the next playlist entry as soon
@@ -4368,9 +4396,10 @@ Demuxer
     ``--shuffle``, and like ``lazy`` otherwise.
 
 ``--directory-filter-types=<video,audio,image,archive,playlist>``
-    Media file types to filter when opening directory. To have all files added
-    to the playlist, clear the list using ``--directory-filter-types-clr``.
-    (Default: ``video,audio,image,archive,playlist``)
+    Media file types to filter when opening directories and archives. To have
+    all files added to the playlist, clear the list using
+    ``--directory-filter-types-clr``. (Default:
+    ``video,audio,image,archive,playlist``)
 
     This is a string list option. See `List Options`_ for details.
 
@@ -4435,6 +4464,10 @@ Input
     disables the built-in dragging behavior. Note that unlike the ``window-dragging``
     option, this option only affects VOs which support the ``begin-vo-dragging``
     command, and does not disable window dragging initialized with the command.
+
+``--input-builtin-drag-and-drop=<yes|no>``
+    Enable the built-in drag-and-drop behavior (default: yes). Setting it to no
+    disables the built-in drag-and-drop handling.
 
 ``--input-cmdlist``
     Prints all commands that can be bound to keys.
@@ -5275,7 +5308,7 @@ libavfilter, within the system audio API resampler, or any other places).
 
 ``--audio-resample-max-output-size=<length>``
     Limit maximum size of audio frames filtered at once, in ms (default: 40).
-    The output size size is limited in order to make resample speed changes
+    The output size is limited in order to make resample speed changes
     react faster. This is necessary especially if decoders or filters output
     very large frame sizes (like some lossless codecs or some DRC filters).
     This option does not affect the resampling algorithm in any way.
@@ -5393,11 +5426,7 @@ Terminal
     line. Expands properties. See `Property Expansion`_.
 
 ``--term-title=<string>``
-    Set the terminal title. Currently, this simply concatenates the escape
-    sequence setting the window title with the provided (property expanded)
-    string. This will mess up if the expanded string contain bytes that end the
-    escape sequence, or if the terminal does not understand the sequence. The
-    latter probably includes the regrettable win32.
+    Set the terminal title.
 
     Expands properties. See `Property Expansion`_.
 
@@ -5685,6 +5714,75 @@ Network
 
     The bitrate as used is sent by the server, and there's no guarantee it's
     actually meaningful.
+
+Network backend (libcurl)
+-------------------------
+
+When mpv is built with libcurl support, ``http://``, ``https://``, ``ftp://``
+and ``ftps://`` URLs are served by an internal libcurl-based stream backend
+instead of FFmpeg. The backend fully supports all features of libcurl, making it
+more robust and compatible with a wide range of servers and CDNs, and faster too.
+
+For HTTP transfers, the backend transparently negotiates HTTP/1.1, HTTP/2
+multiplexing or HTTP/3 (QUIC) when the server offers them, with HSTS enabled
+and TCP keep-alive turned on. Content compression (gzip, deflate, zstd,
+brotli) is always advertised in the request. If the server applies it, the
+transfer is treated as non-seekable. Servers normally do not compress
+already-compressed media payloads. Otherwise, it's great improvement for text
+playlist data transfers.
+
+The backend honors the network options listed above (``--user-agent``,
+``--http-proxy``, ``--http-header-fields``, ``--referrer``, ``--cookies*``,
+``--tls-*``).
+
+If libcurl is not available at build time, mpv uses FFmpeg's networking
+implementation instead.
+
+To inspect libcurl's debug output (requests, response headers,
+TLS/connection diagnostics), set ``--msg-level=curl=trace``.
+
+``--curl-enabled=<yes|no>``
+    Enable the libcurl-based network backend (default: ``yes``).
+
+    Defaults to ``no`` with libavformat < 62.15.101, which has a nested IO
+    cleanup bug that can cause crashes or memory leaks. The issue happens only
+    on transfer failures or aborts, can be enabled if you don't mind possible
+    stability issues.
+
+``--curl-http-version=<auto|1.0|1.1|2|2tls|2-prior-knowledge|3|3only>``
+    Select the maximum HTTP protocol version libcurl is allowed to negotiate.
+    If libcurl was built without HTTP/3 support, it will fallback to ``auto``.
+    (default: ``auto``, i.e. let libcurl pick)
+
+``--curl-max-redirects=<0-100>``
+    Maximum number of HTTP redirects to follow before reporting an error
+    (default: 16).
+
+``--curl-max-retries=<0-100>``
+    Number of times a single seekable transfer may be transparently
+    re-attempted after a recoverable error (timeout, connection drop,
+    HTTP/2 stream reset, ...) before the stream gives up (default: 5).
+    Non-seekable transfers cannot be retried and ignore this option.
+
+``--curl-connect-timeout=<seconds>``
+    TCP/TLS connect timeout in seconds (default: 30, range 0-600). 0 lets
+    libcurl use its built-in default. The overall transfer timeout is
+    controlled by ``--network-timeout``.
+
+``--curl-buffer-size=<bytes>``
+    Size of the per-stream producer-side ring buffer that decouples the
+    network thread from the consumer (default: 4 MiB, minimum: 32 KiB).
+    Lower values may reduce in-flight data and reduce latency.
+
+``--curl-max-request-size=<bytes>``
+    For seekable streams, split the transfer into Range requests of at most
+    this size (default: 0, i.e. one open-ended request for the whole stream).
+    A non-zero value can help with very long-running connections that some
+    CDNs or proxies recycle aggressively, and is also a common workaround for
+    per-connection bandwidth throttling employed by some CDNs (notably some
+    video hosting services), where each individual Range request is served at
+    full speed but a single long-lived connection is rate-limited. Ignored for
+    non-seekable streams.
 
 DVB
 ---
@@ -6354,6 +6452,11 @@ them.
     frame presentation if it is supported by the compositor (default: ``yes``).
     This only has an effect if ``--video-sync=display-...`` is being used.
 
+``--wayland-session=<string>``
+    Set the wayland session name for window restoration (default: unset).
+    Not setting this or setting it to the empty string disables session
+    management.
+
 ``--spirv-compiler=<compiler>``
     Controls which compiler is used to translate GLSL to SPIR-V. This is
     only relevant for ``--gpu-api=d3d11`` with ``--vo=gpu``.
@@ -6400,8 +6503,8 @@ them.
         ...
 
     Each section of metadata, along with the non-metadata lines after it,
-    defines a single block. There are currently two types of blocks, HOOKs and
-    TEXTUREs.
+    defines a single block. There are currently three types of blocks, HOOKs,
+    TEXTUREs, and PARAMs.
 
     A ``TEXTURE`` block can set the following options:
 
@@ -6436,6 +6539,45 @@ them.
     define the raw texture data, corresponding to the format specified by
     `FORMAT`, on a single line with no extra whitespace.
 
+    A ``PARAM`` block can set the following options:
+
+    PARAM <name> (required)
+        Starts a parameter block that defines a tunable shader parameter.
+        Parameters are global across the entire shader file, all hooks in the
+        file can reference them, regardless of declaration order.
+
+    TYPE [ENUM] <DEFINE | <type>> (required)
+        The parameter type. Supported types are ``float`` and ``int``.
+
+        The special type ``DEFINE`` emits a preprocessor define which can be
+        used inside ``#if`` directives.
+
+        If the ``ENUM`` qualifier is used then the type must be either
+        ``DEFINE`` or ``int``. Instead of accepting a default value, ``ENUM``
+        qualified parameter body lists all the possible enumeration values
+        separated by newlines. These values are assigned integer values starting
+        from 0 incremented by 1. Each enumeration will also be emitted as a
+        preprocessor define and will be accessible within RPN expressions.
+        ``MINIMUM`` and ``MAXIMUM`` are ignored.
+
+    MINIMUM <value>
+        Minimum allowed value for this parameter.
+
+    MAXIMUM <value>
+        Maximum allowed value for this parameter.
+
+    DESC <text>
+        Human-readable description of the parameter.
+
+    The initial/default value of the parameter is the first non-metadata line
+    after the parameter headers.
+
+    .. note::
+        ``vo=gpu`` supports only a subset of the parameter features available in
+        ``vo=gpu-next``. See libplacebo documentation for more detailed
+        information about PARAM features supported in ``vo=gpu-next``. Notably
+        ``uint``, ``DYNAMIC``, and ``CONSTANT`` types are not available.
+
     A ``HOOK`` block can set the following options:
 
     HOOK <name> (required)
@@ -6463,11 +6605,11 @@ them.
     WIDTH <szexpr>, HEIGHT <szexpr>
         Specifies the size of the resulting texture for this pass. ``szexpr``
         refers to an expression in RPN (reverse polish notation), using the
-        operators + - * / > < !, floating point literals, and references to
+        operators + - * / > < ! = %, floating point literals, and references to
         sizes of existing texture (such as MAIN.width or CHROMA.height),
-        OUTPUT, or NATIVE_CROPPED (size of an input texture cropped after
-        pan-and-scan, video-align-x/y, video-pan-x/y, etc. and possibly
-        prescaled). By default, these are set to HOOKED.w and HOOKED.h,
+        OUTPUT, tunable parameters, or NATIVE_CROPPED (size of an input texture
+        cropped after pan-and-scan, video-align-x/y, video-pan-x/y, etc. and
+        possibly prescaled). By default, these are set to HOOKED.w and HOOKED.h,
         espectively.
 
     WHEN <szexpr>
@@ -6629,7 +6771,7 @@ them.
     specific named shaders by prefixing the shader name with a ``/``, e.g.
     ``shader/param=value``. Without a prefix, parameters affect all shaders.
     The shader name is the base part of the shader filename, without the
-    extension. (``--vo=gpu-next`` only)
+    extension.
 
     Some parameters are filled automatically if the shader requests them.
     Currently following parameters are available:
@@ -6932,7 +7074,7 @@ them.
 
 ``--macos-geometry-calculation=<visible|whole>``
     This changes the rectangle which is used to calculate the screen position
-    and size of the window (default: visible). ``visible`` takes the the menu
+    and size of the window (default: visible). ``visible`` takes the menu
     bar and Dock into account and the window is only positioned/sized within the
     visible screen frame rectangle, ``whole`` takes the whole screen frame
     rectangle and ignores the menu bar and Dock. Other previous restrictions

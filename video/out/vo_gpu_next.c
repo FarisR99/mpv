@@ -140,7 +140,9 @@ struct priv {
     double last_pts;
     bool is_interpolated;
     bool want_reset;
+    bool flush_cache;
     bool frame_pending;
+    bool paused;
 
     pl_options pars;
     struct m_config_cache *opts_cache;
@@ -201,7 +203,7 @@ const struct m_sub_options gl_next_conf = {
         {"sub-hdr-peak", OPT_CHOICE(sub_hdr_peak, {"sdr", PL_COLOR_SDR_WHITE}),
             M_RANGE(10, 10000)},
         {"image-subs-hdr-peak", OPT_CHOICE(image_subs_hdr_peak, {"sdr", PL_COLOR_SDR_WHITE},
-            {"video", -1}),  M_RANGE(10, 10000)},
+            {"video", -1}, {"video-static", -2}, {"video-dynamic", -3}),  M_RANGE(10, 10000)},
         {"allow-delayed-peak-detect", OPT_BOOL(delayed_peak)},
         {"border-background", OPT_CHOICE(border_background,
             {"none",  BACKGROUND_NONE},
@@ -228,7 +230,7 @@ const struct m_sub_options gl_next_conf = {
         .background_blur_radius = 16.0f,
         .inter_preserve = true,
         .sub_hdr_peak = PL_COLOR_SDR_WHITE,
-        .image_subs_hdr_peak = PL_COLOR_SDR_WHITE,
+        .image_subs_hdr_peak = 1000,
         .target_hint = -1,
         .target_hint_strict = true,
     },
@@ -345,14 +347,21 @@ static void update_overlays(struct vo *vo, struct mp_osd_res res,
             MP_ERR(vo, "Failed recreating OSD texture!\n");
             break;
         }
-        ok = pl_tex_upload(p->gpu, &(struct pl_tex_transfer_params) {
+        struct pl_tex_transfer_params upload_params = {
             .tex        = entry->tex,
             .rc         = { .x1 = item->packed_w, .y1 = item->packed_h, },
             .row_pitch  = item->packed->stride[0],
             .ptr        = item->packed->planes[0],
-        });
+        };
+        // Keep the image alive until it's fully read.
+        if (p->gpu->limits.callbacks) {
+            upload_params.callback = talloc_free;
+            upload_params.priv = mp_image_new_ref(item->packed);
+        }
+        ok = pl_tex_upload(p->gpu, &upload_params);
         if (!ok) {
             MP_ERR(vo, "Failed uploading OSD texture!\n");
+            talloc_free(upload_params.priv);
             break;
         }
 
@@ -380,10 +389,7 @@ static void update_overlays(struct vo *vo, struct mp_osd_res res,
             .tex = entry->tex,
             .parts = entry->parts,
             .num_parts = entry->num_parts,
-            .color = {
-                .primaries = PL_COLOR_PRIM_BT_709,
-                .transfer = PL_COLOR_TRC_SRGB,
-            },
+            .color = pl_color_space_srgb,
             .coords = coords,
         };
 
@@ -395,10 +401,17 @@ static void update_overlays(struct vo *vo, struct mp_osd_res res,
             if (src) {
                 ol->color = src->params.color;
                 if (pl_color_transfer_is_hdr(ol->color.transfer)) {
-                    if (!pl_color_transfer_is_hdr(frame->color.transfer)) {
-                        // Tone mapping targets SDR white
+                    bool use_static = p->next_opts->image_subs_hdr_peak == -2;
+                    if (use_static || p->next_opts->image_subs_hdr_peak == -3) {
+                        float max;
+                        pl_color_space_nominal_luma_ex(pl_nominal_luma_params(
+                            .color      = &ol->color,
+                            .metadata   = use_static ? PL_HDR_METADATA_HDR10 : PL_HDR_METADATA_ANY,
+                            .scaling    = PL_HDR_NITS,
+                            .out_max    = &max,
+                        ));
                         ol->color.hdr = (struct pl_hdr_metadata) {
-                            .max_luma = PL_COLOR_SDR_WHITE,
+                            .max_luma = max,
                         };
                     } else if (p->next_opts->image_subs_hdr_peak != -1) {
                         ol->color.hdr = (struct pl_hdr_metadata) {
@@ -786,8 +799,12 @@ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src
                 data[n].buf = buf;
                 data[n].buf_offset = (uint8_t *) data[n].pixels - buf->data;
                 data[n].pixels = NULL;
-            } else if (gpu->limits.callbacks) {
+            }
+            // Keep the image alive until it's fully read.
+            if (gpu->limits.callbacks) {
+                mp_assert(!data[n].callback);
                 data[n].callback = talloc_free;
+                mp_assert(!data[n].priv);
                 data[n].priv = mp_image_new_ref(mpi);
             }
 
@@ -799,6 +816,10 @@ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src
                 talloc_free(mpi);
                 return false;
             }
+
+            // Without async callback support, we have to poll...
+            if (!gpu->limits.callbacks && data[n].buf)
+                while (pl_buf_poll(gpu, data[n].buf, UINT64_MAX));
         }
         timer_pool_stop(p->sw_upload_timer);
         p->sw_upload_perf = timer_pool_measure(p->sw_upload_timer);
@@ -951,6 +972,11 @@ static void apply_target_options(struct priv *p, struct pl_frame *target,
         struct ra_swapchain *sw = p->ra_ctx->swapchain;
         dither_depth = sw->fns->color_depth ? sw->fns->color_depth(sw) : 0;
     }
+#if PL_API_VER >= 362
+    // Don't dither scRGB, assume downstream will handle quantization properly.
+    if (target->color.transfer == PL_COLOR_TRC_SCRGB)
+        dither_depth = -1;
+#endif
     if (dither_depth > 0) {
         struct pl_bit_encoding *tbits = &target->repr.bits;
         tbits->color_depth += dither_depth - tbits->sample_depth;
@@ -1052,15 +1078,15 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
     struct pl_render_params params = pars->params;
     const struct gl_video_opts *opts = p->opts_cache->opts;
     bool will_redraw = frame->display_synced && frame->num_vsyncs > 1;
-    bool cache_frame = will_redraw || frame->still;
+    bool cache_frame = will_redraw || frame->still || p->paused;
     bool can_interpolate = opts->interpolation && frame->display_synced &&
-                           !frame->still && frame->num_frames > 1;
+                           !frame->still && frame->num_frames > 1 && !p->paused;
     double pts_offset = can_interpolate ? frame->ideal_frame_vsync : 0;
     params.info_callback = info_callback;
     params.info_priv = vo;
     params.skip_caching_single_frame = !cache_frame;
     params.preserve_mixing_cache = p->next_opts->inter_preserve && !frame->still;
-    if (frame->still)
+    if (frame->still || p->paused)
         params.frame_mixer = NULL;
 
     if (frame->current && frame->current->params.vflip) {
@@ -1097,11 +1123,16 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
         int id = frame->frame_id + n;
 
         if (p->want_reset) {
-            pl_renderer_flush_cache(p->rr);
             pl_queue_reset(p->queue);
             p->last_pts = 0.0;
             p->last_id = 0;
             p->want_reset = false;
+            p->flush_cache = true;
+        }
+
+        if (p->flush_cache) {
+            pl_renderer_flush_cache(p->rr);
+            p->flush_cache = false;
         }
 
         if (id <= p->last_id)
@@ -1371,7 +1402,8 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
         case PL_QUEUE_MORE:
             // This is expected to happen semi-frequently near the start and
             // end of a file, so only log it at high verbosity and move on.
-            MP_DBG(vo, "Render queue underrun.\n");
+            if (!frame->still)
+                MP_DBG(vo, "Render queue underrun.\n");
             break;
         case PL_QUEUE_OK:
             break;
@@ -1859,6 +1891,10 @@ static int control(struct vo *vo, uint32_t request, void *data)
     case VOCTRL_PAUSE:
         if (p->is_interpolated)
             vo->want_redraw = true;
+        p->paused = true;
+        return VO_TRUE;
+    case VOCTRL_RESUME:
+        p->paused = false;
         return VO_TRUE;
 
     case VOCTRL_UPDATE_RENDER_OPTS: {
@@ -2134,6 +2170,11 @@ done:
 static void uninit(struct vo *vo)
 {
     struct priv *p = vo->priv;
+
+    // Drain any in-flight uploads.
+    if (p->gpu)
+        pl_gpu_finish(p->gpu);
+
     pl_queue_destroy(&p->queue); // destroy this first
     for (int i = 0; i < MP_ARRAY_SIZE(p->osd_state.entries); i++)
         pl_tex_destroy(p->gpu, &p->osd_state.entries[i].tex);
@@ -2426,39 +2467,16 @@ static void update_lut(struct priv *p, struct user_lut *lut)
 static void update_hook_opts_dynamic(struct priv *p, const struct pl_hook *hook,
                                      const struct mp_image *mpi)
 {
-    float chroma_offset_x, chroma_offset_y;
-    pl_chroma_location_offset(mpi->params.chroma_location,
-                              &chroma_offset_x, &chroma_offset_y);
-    const struct {
-        const char *name;
-        double value;
-    } opts[] = {
-        {             "PTS", mpi->pts                           },
-        { "chroma_offset_x", chroma_offset_x                    },
-        { "chroma_offset_y", chroma_offset_y                    },
-        {        "min_luma", mpi->params.color.hdr.min_luma     },
-        {        "max_luma", mpi->params.color.hdr.max_luma     },
-        {         "max_cll", mpi->params.color.hdr.max_cll      },
-        {        "max_fall", mpi->params.color.hdr.max_fall     },
-        {     "scene_max_r", mpi->params.color.hdr.scene_max[0] },
-        {     "scene_max_g", mpi->params.color.hdr.scene_max[1] },
-        {     "scene_max_b", mpi->params.color.hdr.scene_max[2] },
-        {       "scene_avg", mpi->params.color.hdr.scene_avg    },
-        {        "max_pq_y", mpi->params.color.hdr.max_pq_y     },
-        {        "avg_pq_y", mpi->params.color.hdr.avg_pq_y     },
-    };
-
     for (int i = 0; i < hook->num_parameters; i++) {
+        double val;
         const struct pl_hook_par *hp = &hook->parameters[i];
-        for (int n = 0; n < MP_ARRAY_SIZE(opts); n++) {
-            if (strcmp(hp->name, opts[n].name) != 0)
-                continue;
+        if (!gpu_get_auto_param(mpi, bstr0(hp->name), &val))
+            continue;
 
-            switch (hp->type) {
-                case PL_VAR_FLOAT: hp->data->f = opts[n].value; break;
-                case PL_VAR_SINT:  hp->data->i = lrint(opts[n].value); break;
-                case PL_VAR_UINT:  hp->data->u = lrint(opts[n].value); break;
-            }
+        switch (hp->type) {
+        case PL_VAR_FLOAT: hp->data->f = val; break;
+        case PL_VAR_SINT:  hp->data->i = lrint(val); break;
+        case PL_VAR_UINT:  hp->data->u = lrint(val); break;
         }
     }
 }
@@ -2681,8 +2699,8 @@ AV_NOWARN_DEPRECATED(
 
     pars->params.hooks = p->hooks;
 
-    MP_DBG(p, "Render options updated, resetting render state.\n");
-    p->want_reset = true;
+    MP_DBG(p, "Render options updated, flushing renderer cache.\n");
+    p->flush_cache = p->paused || !p->next_opts->inter_preserve;
 }
 
 const struct vo_driver video_out_gpu_next = {

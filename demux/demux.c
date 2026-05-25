@@ -102,6 +102,8 @@ const struct m_sub_options demux_conf = {
         {"cache-on-disk", OPT_BOOL(disk_cache)},
         {"demuxer-readahead-secs", OPT_DOUBLE(min_secs), M_RANGE(0, DBL_MAX)},
         {"demuxer-hysteresis-secs", OPT_DOUBLE(hyst_secs), M_RANGE(0, DBL_MAX)},
+        {"demuxer-hysteresis-bytes", OPT_BYTE_SIZE(hyst_bytes),
+            M_RANGE(0, M_MAX_MEM_BYTES)},
         {"demuxer-max-bytes", OPT_BYTE_SIZE(max_bytes),
             M_RANGE(0, M_MAX_MEM_BYTES)},
         {"demuxer-max-back-bytes", OPT_BYTE_SIZE(max_bytes_bw),
@@ -128,6 +130,7 @@ const struct m_sub_options demux_conf = {
         {"demuxer-backward-playback-step", OPT_DOUBLE(back_seek_size),
             M_RANGE(0, DBL_MAX)},
         {"metadata-codepage", OPT_STRING(meta_cp)},
+        {"directory-filter-types", OPT_STRINGLIST(directory_filter)},
         {"autocreate-playlist", OPT_CHOICE(autocreate_playlist,
             {"no", 0}, {"filter", 1}, {"same", 2})},
         {0}
@@ -152,6 +155,9 @@ const struct m_sub_options demux_conf = {
             [STREAM_AUDIO] = 10,
         },
         .meta_cp = "auto",
+        .directory_filter = (char *[]){
+            "video", "audio", "image", "archive", "playlist", NULL
+        },
     },
     .get_sub_options = get_demux_sub_opts,
 };
@@ -201,6 +207,7 @@ struct demux_internal {
     bool eof;                   // whether we're in EOF state
     double min_secs;
     double hyst_secs;           // stop reading till there's hyst_secs remaining
+    size_t hyst_bytes;          // stop reading till there's hyst_bytes remaining
     bool hyst_active;
     size_t max_bytes;
     size_t max_bytes_bw;
@@ -960,7 +967,6 @@ struct sh_stream *demux_alloc_sh_stream(enum stream_type type)
         .index = -1,
         .ff_index = -1,     // may be overwritten by demuxer
         .demuxer_id = -1,   // ... same
-        .program_id = -1,   // ... same
         .codec = talloc_zero(sh, struct mp_codec_params),
         .tags = talloc_zero(sh, struct mp_tags),
     };
@@ -1249,6 +1255,76 @@ const char *stream_type_name(enum stream_type type)
     }
 }
 
+static void append_field(void *ta_ctx, bstr *dst, const char *skip_dup,
+                         const char *value)
+{
+    if (skip_dup && skip_dup[0] && strstr(skip_dup, value))
+        return;
+    bstr_xappend_asprintf(ta_ctx, dst, " %s", value);
+}
+
+void demux_append_codec_desc(void *ta_ctx, bstr *dst, struct sh_stream *sh,
+                             const char *skip_dup)
+{
+    struct mp_codec_params *c = sh->codec;
+
+    bstr_xappend0(ta_ctx, dst, c->codec ? c->codec : "<unknown>");
+
+    if (c->codec_profile)
+        bstr_xappend_asprintf(ta_ctx, dst, " [%s]", c->codec_profile);
+    if (c->disp_w)
+        append_field(ta_ctx, dst, skip_dup,
+                     mp_tprintf(32, "%dx%d", c->disp_w, c->disp_h));
+    if (c->fps && !sh->image) {
+        char *fps = mp_format_double(ta_ctx, c->fps, 4, false, false, true);
+        append_field(ta_ctx, dst, skip_dup, mp_tprintf(32, "%s fps", fps));
+    }
+    if (c->channels.num)
+        bstr_xappend_asprintf(ta_ctx, dst, " %dch", c->channels.num);
+    if (c->samplerate)
+        bstr_xappend_asprintf(ta_ctx, dst, " %d Hz", c->samplerate);
+    int bitrate = 0;
+    if (c->bitrate > 0 && c->bitrate < INT_MAX - 500) {
+        bitrate = (c->bitrate + 500) / 1000;
+    } else if (sh->hls_bitrate > 0 && sh->hls_bitrate < INT_MAX - 500) {
+        bitrate = (sh->hls_bitrate + 500) / 1000;
+    }
+    if (bitrate)
+        append_field(ta_ctx, dst, skip_dup, mp_tprintf(32, "%d kbps", bitrate));
+}
+
+char *demux_compose_edition_title(void *ta_ctx, struct demuxer *demuxer,
+                                  int program_id, const char *prefix)
+{
+    struct sh_stream *vsh = NULL, *ash = NULL;
+    int video_count = 0, audio_count = 0;
+    int num = demux_get_num_stream(demuxer);
+    for (int i = 0; i < num; i++) {
+        struct sh_stream *s = demux_get_stream(demuxer, i);
+        if (!sh_stream_has_program(s, program_id))
+            continue;
+        if (s->type == STREAM_VIDEO) { video_count++; vsh = s; }
+        else if (s->type == STREAM_AUDIO) { audio_count++; ash = s; }
+    }
+
+    bstr dst = {0};
+    if (prefix && prefix[0])
+        bstr_xappend0(ta_ctx, &dst, prefix);
+    if (video_count == 1) {
+        bstr_xappend0(ta_ctx, &dst, dst.len ? " (" : "(");
+        demux_append_codec_desc(ta_ctx, &dst, vsh, prefix);
+        bstr_xappend0(ta_ctx, &dst, ")");
+    }
+    if (audio_count == 1) {
+        bstr_xappend0(ta_ctx, &dst, dst.len ? " (" : "(");
+        demux_append_codec_desc(ta_ctx, &dst, ash, prefix);
+        bstr_xappend0(ta_ctx, &dst, ")");
+    }
+    if (!dst.len)
+        return NULL;
+    return bstrto0(ta_ctx, dst);
+}
+
 static struct sh_stream *demuxer_get_cc_track_locked(struct sh_stream *stream)
 {
     struct sh_stream *sh = stream->ds->cc;
@@ -1260,7 +1336,8 @@ static struct sh_stream *demuxer_get_cc_track_locked(struct sh_stream *stream)
         sh->codec->codec = "eia_608";
         sh->default_track = true;
         sh->hls_bitrate = stream->hls_bitrate;
-        sh->program_id = stream->program_id;
+        for (int i = 0; i < stream->num_program_ids; i++)
+            MP_TARRAY_APPEND(sh, sh->program_ids, sh->num_program_ids, stream->program_ids[i]);
         stream->ds->cc = sh;
         demux_add_sh_stream_locked(stream->ds->in, sh);
         sh->ds->ignore_eof = true;
@@ -2205,12 +2282,17 @@ static bool read_packet(struct demux_internal *in)
         total_fw_bytes += get_forward_buffered_bytes(ds);
     }
 
+    if (in->hyst_bytes > 0 && total_fw_bytes <= in->hyst_bytes) {
+        in->hyst_active = false;
+        prefetch_more |= true;
+    }
+
     MP_TRACE(in, "bytes=%zd, read_more=%d prefetch_more=%d, refresh_more=%d\n",
              (size_t)total_fw_bytes, read_more, prefetch_more, refresh_more);
     if (total_fw_bytes >= in->max_bytes) {
         // if we hit the limit just by prefetching, simply stop prefetching
         if (!read_more) {
-            in->hyst_active = !!in->hyst_secs;
+            in->hyst_active = in->hyst_secs > 0 || in->hyst_bytes > 0;
             return false;
         }
         if (!in->warned_queue_overflow) {
@@ -2243,7 +2325,7 @@ static bool read_packet(struct demux_internal *in)
     }
 
     if (!read_more && !prefetch_more && !refresh_more) {
-        in->hyst_active = !!in->hyst_secs;
+        in->hyst_active = in->hyst_secs > 0 || in->hyst_bytes > 0;
         return false;
     }
 
@@ -2463,6 +2545,7 @@ static void update_opts(struct demuxer *demuxer)
 
     in->min_secs = opts->min_secs;
     in->hyst_secs = opts->hyst_secs;
+    in->hyst_bytes = opts->hyst_bytes;
     in->max_bytes = opts->max_bytes;
     in->max_bytes_bw = opts->max_bytes_bw;
 
@@ -2869,7 +2952,7 @@ static int decode_float(char *str, float *out)
     float dec_val;
 
     dec_val = strtod(str, &rest);
-    if (!rest || (rest == str) || !isfinite(dec_val))
+    if (rest == str || !isfinite(dec_val))
         return -1;
 
     *out = dec_val;
@@ -2991,6 +3074,7 @@ static void demux_copy(struct demuxer *dst, struct demuxer *src)
     dst->editions = src->editions;
     dst->num_editions = src->num_editions;
     dst->edition = src->edition;
+    dst->edition_is_track_mapping = src->edition_is_track_mapping;
     dst->attachments = src->attachments;
     dst->num_attachments = src->num_attachments;
     dst->matroska_data = src->matroska_data;
@@ -4019,6 +4103,22 @@ static void refresh_track(struct demux_internal *in, struct sh_stream *stream,
     }
 }
 
+static bool select_track(struct demux_internal *in,
+                         struct sh_stream *stream,
+                         double ref_pts, bool selected)
+{
+    struct demux_stream *ds = stream->ds;
+    if (ds->selected == selected)
+        return false;
+    MP_VERBOSE(in, "%sselect track %d\n", selected ? "" : "de", stream->index);
+    ds->selected = selected;
+    update_stream_selection_state(in, ds);
+    in->tracks_switched = true;
+    if (ds->selected)
+        refresh_track(in, stream, ref_pts);
+    return true;
+}
+
 // Set whether the given stream should return packets.
 // ref_pts is used only if the stream is enabled. Then it serves as approximate
 // start pts for this stream (in the worst case it is ignored).
@@ -4026,16 +4126,17 @@ void demuxer_select_track(struct demuxer *demuxer, struct sh_stream *stream,
                           double ref_pts, bool selected)
 {
     struct demux_internal *in = demuxer->in;
-    struct demux_stream *ds = stream->ds;
     mp_mutex_lock(&in->lock);
-    // don't flush buffers if stream is already selected / unselected
-    if (ds->selected != selected) {
-        MP_VERBOSE(in, "%sselect track %d\n", selected ? "" : "de", stream->index);
-        ds->selected = selected;
-        update_stream_selection_state(in, ds);
-        in->tracks_switched = true;
-        if (ds->selected)
-            refresh_track(in, stream, ref_pts);
+    bool changed = select_track(in, stream, ref_pts, selected);
+    if (stream->group) {
+        for (int i = 0; i < stream->group->num_members; i++) {
+            struct sh_stream *m = stream->group->members[i];
+            mp_assert(m);
+            if (m != stream)
+                changed |= select_track(in, m, ref_pts, selected);
+        }
+    }
+    if (changed) {
         if (in->threading) {
             mp_cond_signal(&in->wakeup);
         } else {

@@ -40,6 +40,7 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 500M
+      DOWNLOAD_CACHE: ${{ github.workspace }}/.ccache/downloads
       TARGET: ${{ matrix.arch }}-w64-mingw32
       RUST_TARGET: ${{ matrix.arch }}-pc-windows-gnu
     strategy:
@@ -169,6 +170,13 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ matrix.target }}-${{ steps.get_time.outputs.timestamp }}
           restore-keys: ${{ matrix.target }}-
+
+      - name: Install Winget on windows-11-arm
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          Install-Module -Name Microsoft.WinGet.Client -Repository PSGallery -Force
+          Repair-WinGetPackageManager -Latest -Force
 
       - name: Install dependencies
         run: |
@@ -338,6 +346,7 @@ jobs:
           apk update
           apk add \
               binutils \
+              curl-dev \
               ffmpeg-dev \
               gcc \
               git \
@@ -424,6 +433,7 @@ jobs:
             ca-certificates:p
             cc:p
             cppwinrt:p
+            curl:p
             ffmpeg:p
             lcms2:p
             libarchive:p
