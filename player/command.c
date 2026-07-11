@@ -536,7 +536,7 @@ static int mp_property_filename(void *ctx, struct m_property *prop,
         if (strcmp(ka->key, "no-ext") == 0) {
             action = ka->action;
             arg = ka->arg;
-            f = mp_strip_ext(filename, f);
+            f = bstrto0(filename, mp_strip_ext(bstr0(f)));
         }
     }
     int r = m_property_strdup_ro(action, arg, f);
@@ -2115,7 +2115,8 @@ static int get_track_entry(int item, int action, void *arg, void *ctx)
         {"main-selection", SUB_PROP_INT(order), .unavailable = order < 0},
         {"external-filename", SUB_PROP_STR(track->external_filename),
                         .unavailable = !track->external_filename},
-        {"ff-index",    SUB_PROP_INT(track->ff_index)},
+        {"ff-index",    SUB_PROP_INT(track->ff_index),
+                        .unavailable = track->ff_index == -1},
         {"hls-bitrate", SUB_PROP_INT(track->hls_bitrate),
                         .unavailable = !track->hls_bitrate},
         {"program-id",  SUB_PROP_INT(sh && sh->num_program_ids ? sh->program_ids[0] : -1),
@@ -5431,7 +5432,7 @@ static void cmd_overlay_add(void *pcmd)
         MP_ERR(mpctx, "overlay-add: invalid id %d\n", id);
         goto error;
     }
-    if (w <= 0 || h <= 0 || stride < w * 4 || (stride % 4) || offset < 0) {
+    if (w <= 0 || h <= 0 || stride / 4 < w || (stride % 4) || offset < 0) {
         MP_ERR(mpctx, "overlay-add: inconsistent parameters\n");
         goto error;
     }
@@ -8388,6 +8389,10 @@ void mp_option_run_callback(struct MPContext *mpctx, struct mp_option_callback *
                             if (sel != mpctx->current_track[i][t])
                                 mp_switch_track_n(mpctx, i, t, sel, 0);
                         }
+                    }
+                    if (demuxer->ts_resets_possible) {
+                        reset_playback_state(mpctx);
+                        demux_flush(demuxer);
                     }
                     mp_notify_property(mpctx, "current-edition");
                     print_track_list(mpctx,

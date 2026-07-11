@@ -2815,10 +2815,12 @@ Subtitles
     This also affects image subtitle brightness in HDR tone mapping with
     ``--blend-subtitles=<yes|video>``.
 
-``--sub-hdr-peak=<sdr|10-10000>``
+``--sub-hdr-peak=<auto|sdr|10-10000>``
     Controls the text subtitle and OSD diffuse white level in cd/m² (nits)
-    for HDR output (default: sdr). ``sdr`` is 203 cd/m² for standard SDR white.
-    (``--vo=gpu-next`` only)
+    for HDR output (default: auto). In ``auto`` mode, subtitles and OSD follow
+    the reference white (see ``--hdr-reference-white``), matching the diffuse
+    white level used for SDR content. ``sdr`` forces 203 cd/m² for standard SDR
+    white. (``--vo=gpu-next`` only)
 
     This also affects text subtitle brightness in HDR tone mapping with
     ``--blend-subtitles=<yes|video>``.
@@ -5751,14 +5753,12 @@ TLS/connection diagnostics), set ``--msg-level=curl=trace``.
 ``--curl-enabled=<yes|no>``
     Enable the libcurl-based network backend (default: ``yes``).
 
-    Defaults to ``no`` with libavformat < 62.15.101, which has a nested IO
+    Defaults to ``no`` on known older FFmpeg versions, which have a nested IO
     cleanup bug that can cause crashes or memory leaks. The issue happens only
-    on transfer failures or aborts, can be enabled if you don't mind possible
-    stability issues.
+    on transfer failures or aborts.
 
 ``--curl-http-version=<auto|1.0|1.1|2|2tls|2-prior-knowledge|3|3only>``
     Select the maximum HTTP protocol version libcurl is allowed to negotiate.
-    If libcurl was built without HTTP/3 support, it will fallback to ``auto``.
     (default: ``auto``, i.e. let libcurl pick)
 
 ``--curl-max-redirects=<0-100>``
@@ -7534,11 +7534,16 @@ them.
     encoding into the target colorspace, so after the application of
     ``--target-trc``. (Only for ``--vo=gpu-next``)
 
-``--hdr-reference-white=<auto|10-1000000>``
+``--hdr-reference-white=<auto|10-10000>``
     Specifies the assumed peak brightness of the mastering display for SDR
     content, in cd/m² (nits). This is used as HDR diffuse white level for SDR
     content. Essentially this is the SDR brightness in HDR container.
-    Default is 203 cd/m². (Only for ``--vo=gpu-next``)
+    (Only for ``--vo=gpu-next``)
+
+    In ``auto`` mode (default), the reference white luminance is queried from
+    the system. This is currently only supported on Windows. If the system does
+    not provide a value, 203 cd/m² is assumed. (``auto`` mode works only
+    with libplacebo >= 371)
 
     .. note::
 
