@@ -110,7 +110,6 @@ struct mp_subtitle_opts {
     bool sub_scale_with_window;
     bool ass_scale_with_window;
     struct osd_style_opts *sub_style;
-    float sub_scale;
     bool sub_scale_signs;
     float sub_gauss;
     bool sub_gray;
@@ -141,6 +140,7 @@ struct mp_subtitle_opts {
 struct mp_subtitle_shared_opts {
     double sub_delay[2];
     float sub_pos[2];
+    float sub_scale[2];
     bool sub_visibility[2];
     int ass_style_override[2];
 };
@@ -283,6 +283,7 @@ typedef struct MPOpts {
     char **input_commands;
     bool consolecontrols;
     int playlist_pos;
+    int playlist_inherit_options;
     struct m_rel_time play_start;
     struct m_rel_time play_end;
     struct m_rel_time play_length;
