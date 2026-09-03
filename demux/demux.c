@@ -209,6 +209,8 @@ struct demux_internal {
     double hyst_secs;           // stop reading till there's hyst_secs remaining
     size_t hyst_bytes;          // stop reading till there's hyst_bytes remaining
     bool hyst_active;
+    bool nav_active;            // disc navigation (DVD/BD menus) is active
+    bool nav_pump;              // one-shot request to force a single read
     size_t max_bytes;
     size_t max_bytes_bw;
     bool seekable_cache;
@@ -241,6 +243,7 @@ struct demux_internal {
     bool back_any_need_recheck; // at least 1 ds->back_need_recheck set
 
     bool tracks_switched;       // thread needs to inform demuxer of this
+    bool nav_refresh;           // thread needs to call desc->nav_refresh
 
     atomic_bool seeking;        // there's a seek queued; read unlocked
                                 // by demux_read_interrupted()
@@ -280,6 +283,15 @@ struct demux_internal {
     // demux user state (user thread, somewhat similar to reader/decoder state)
     double last_playback_pts;   // last playback_pts from demux_update()
     bool force_metadata_update;
+
+    // Chapter/edition lists staged by the demux thread (demux_lists_changed),
+    // published into d_user by demux_update() on the user thread.
+    bool lists_changed;
+    struct demux_chapter *staged_chapters;
+    int num_staged_chapters;
+    struct demux_edition *staged_editions;
+    int num_staged_editions;
+    int staged_edition;
     int cached_metadata_index;  // speed up repeated lookups
 
     struct mp_recorder *dumper;
@@ -879,15 +891,8 @@ static void wakeup_ds(struct demux_stream *ds)
     }
 }
 
-static void update_stream_selection_state(struct demux_internal *in,
-                                          struct demux_stream *ds)
+static void update_stream_eager_state(struct demux_internal *in)
 {
-    ds->eof = false;
-    ds->refreshing = false;
-
-    // We still have to go over the whole stream list to update ds->eager for
-    // other streams too, because they depend on other stream's selections.
-
     bool any_av_streams = false;
     bool any_streams = false;
 
@@ -895,25 +900,63 @@ static void update_stream_selection_state(struct demux_internal *in,
         struct demux_stream *s = in->streams[n]->ds;
 
         s->still_image = s->sh->still_image;
-        s->eager = s->selected && !s->sh->attached_picture;
+        s->eager = s->selected && !s->sh->absent && !s->sh->attached_picture;
         if (s->eager && !s->still_image)
             any_av_streams |= s->type != STREAM_SUB;
         any_streams |= s->selected;
     }
 
-    // Subtitles are only eagerly read if there are no other eagerly read
-    // streams.
+    // Subtitles and sparse still-image video are only eagerly read if there are
+    // no other eagerly read streams.
     if (any_av_streams) {
         for (int n = 0; n < in->num_streams; n++) {
             struct demux_stream *s = in->streams[n]->ds;
 
-            if (s->type == STREAM_SUB)
+            if (s->type == STREAM_SUB || s->still_image)
                 s->eager = false;
         }
     }
 
     if (!any_streams)
         in->blocked = false;
+}
+
+void demux_set_stream_still_image(demuxer_t *demuxer, struct sh_stream *sh,
+                                  bool still_image)
+{
+    struct demux_internal *in = demuxer->in;
+    mp_assert(demuxer == in->d_thread);
+
+    mp_mutex_lock(&in->lock);
+    sh->still_image = still_image;
+    update_stream_eager_state(in);
+    mp_mutex_unlock(&in->lock);
+}
+
+// Set whether the media provides data for this stream at all.
+void demux_set_stream_absent(demuxer_t *demuxer, struct sh_stream *sh,
+                             bool absent)
+{
+    struct demux_internal *in = demuxer->in;
+    mp_assert(demuxer == in->d_thread);
+
+    mp_mutex_lock(&in->lock);
+    if (sh->absent != absent) {
+        MP_VERBOSE(in, "stream %d is %s\n", sh->index,
+                   absent ? "absent" : "present");
+        sh->absent = absent;
+        update_stream_eager_state(in);
+    }
+    mp_mutex_unlock(&in->lock);
+}
+
+static void update_stream_selection_state(struct demux_internal *in,
+                                          struct demux_stream *ds)
+{
+    ds->eof = false;
+    ds->refreshing = false;
+
+    update_stream_eager_state(in);
 
     ds_clear_reader_state(ds, true);
 
@@ -1244,6 +1287,33 @@ void demux_start_prefetch(struct demuxer *demuxer)
     mp_mutex_lock(&in->lock);
     in->reading = true;
     mp_cond_signal(&in->wakeup);
+    mp_mutex_unlock(&in->lock);
+}
+
+void demux_drive_nav(struct demuxer *demuxer)
+{
+    struct demux_internal *in = demuxer->in;
+    mp_assert(demuxer == in->d_user);
+
+    mp_mutex_lock(&in->lock);
+    in->nav_pump = true;
+    in->reading = true;
+    mp_cond_signal(&in->wakeup);
+    mp_mutex_unlock(&in->lock);
+}
+
+// Re-queue sticky packets (e.g. the DVD menu subpicture) for re-delivery.
+void demux_nav_refresh(struct demuxer *demuxer)
+{
+    struct demux_internal *in = demuxer->in;
+    mp_assert(demuxer == in->d_user);
+
+    mp_mutex_lock(&in->lock);
+    if (in->d_thread->desc->nav_refresh) {
+        in->nav_refresh = true;
+        in->reading = true;
+        mp_cond_signal(&in->wakeup);
+    }
     mp_mutex_unlock(&in->lock);
 }
 
@@ -2302,6 +2372,13 @@ static bool read_packet(struct demux_internal *in)
         prefetch_more |= true;
     }
 
+    // While interactive disc navigation is active, never read ahead. It would
+    // advance the disc VM past what the user is watching. Reads still happen
+    // whenever a selected stream demands data.
+    if (in->nav_active)
+        prefetch_more = false;
+    prefetch_more |= in->nav_pump;
+
     MP_TRACE(in, "bytes=%zd, read_more=%d prefetch_more=%d, refresh_more=%d\n",
              (size_t)total_fw_bytes, read_more, prefetch_more, refresh_more);
     if (total_fw_bytes >= in->max_bytes) {
@@ -2355,6 +2432,7 @@ static bool read_packet(struct demux_internal *in)
     // Actually read a packet. Drop the lock while doing so, because waiting
     // for disk or network I/O can take time.
     in->reading = true;
+    in->nav_pump = false;
     in->after_seek = false;
     in->after_seek_to_start = false;
     mp_mutex_unlock(&in->lock);
@@ -2519,6 +2597,18 @@ static void execute_trackswitch(struct demux_internal *in)
     mp_mutex_lock(&in->lock);
 }
 
+static void execute_nav_refresh(struct demux_internal *in)
+{
+    in->nav_refresh = false;
+
+    mp_mutex_unlock(&in->lock);
+
+    if (in->d_thread->desc->nav_refresh)
+        in->d_thread->desc->nav_refresh(in->d_thread);
+
+    mp_mutex_lock(&in->lock);
+}
+
 static void execute_seek(struct demux_internal *in)
 {
     int flags = in->seek_flags;
@@ -2576,6 +2666,8 @@ static void update_opts(struct demuxer *demuxer)
             seekable = 1;
     }
     in->seekable_cache = seekable == 1;
+    if (in->d_thread->no_cache_seeking)
+        in->seekable_cache = false;
     in->using_network_cache_opts = is_streaming && use_cache;
 
     if (!in->seekable_cache)
@@ -2633,6 +2725,10 @@ static bool thread_work(struct demux_internal *in)
     }
     if (in->tracks_switched) {
         execute_trackswitch(in);
+        return true;
+    }
+    if (in->nav_refresh) {
+        execute_nav_refresh(in);
         return true;
     }
     if (in->need_back_seek) {
@@ -3073,7 +3169,7 @@ static void demux_update_replaygain(demuxer_t *demuxer)
             if (!rg)
                 rg = decode_rgain(demuxer->log, demuxer->metadata);
             if (rg)
-                sh->codec->replaygain_data = talloc_steal(in, rg);
+                sh->codec->replaygain_data = talloc_steal(sh->codec, rg);
         }
     }
 }
@@ -3179,6 +3275,53 @@ void demux_metadata_changed(demuxer_t *demuxer)
     mp_mutex_unlock(&in->lock);
 }
 
+// Updates the duration should it need to be changed. Used for demuxers that
+// changes titles/playlists at runtime.
+void demux_set_duration(demuxer_t *demuxer, double duration)
+{
+    mp_assert(demuxer == demuxer->in->d_thread);
+    struct demux_internal *in = demuxer->in;
+
+    mp_mutex_lock(&in->lock);
+    in->duration = duration;
+    in->d_thread->duration = duration;
+    in->highest_av_pts = MP_NOPTS_VALUE;
+    in->events |= DEMUX_EVENT_DURATION;
+    mp_mutex_unlock(&in->lock);
+}
+
+// Tell the cache whether interactive disc navigation is active.
+void demux_set_nav_active(demuxer_t *demuxer, bool active)
+{
+    struct demux_internal *in = demuxer->in;
+    mp_assert(demuxer == in->d_thread);
+
+    mp_mutex_lock(&in->lock);
+    if (in->nav_active != active) {
+        in->nav_active = active;
+        mp_cond_signal(&in->wakeup);
+    }
+    mp_mutex_unlock(&in->lock);
+}
+
+// Updates the chapters/editions should it need to be changed. Used for demuxers
+// that changes titles/playlists at runtime.
+void demux_lists_changed(demuxer_t *demuxer)
+{
+    mp_assert(demuxer == demuxer->in->d_thread);
+    struct demux_internal *in = demuxer->in;
+
+    mp_mutex_lock(&in->lock);
+    in->lists_changed = true;
+    in->staged_chapters = in->d_thread->chapters;
+    in->num_staged_chapters = in->d_thread->num_chapters;
+    in->staged_editions = in->d_thread->editions;
+    in->num_staged_editions = in->d_thread->num_editions;
+    in->staged_edition = in->d_thread->edition;
+    in->events |= DEMUX_EVENT_LISTS;
+    mp_mutex_unlock(&in->lock);
+}
+
 // Called locked, with user demuxer.
 static void update_final_metadata(demuxer_t *demuxer, struct timed_metadata *tm)
 {
@@ -3276,6 +3419,14 @@ void demux_update(demuxer_t *demuxer, double pts)
 
     demuxer->events |= in->events;
     in->events = 0;
+    if (in->lists_changed) {
+        in->lists_changed = false;
+        demuxer->chapters = in->staged_chapters;
+        demuxer->num_chapters = in->num_staged_chapters;
+        demuxer->editions = in->staged_editions;
+        demuxer->num_editions = in->num_staged_editions;
+        demuxer->edition = in->staged_edition;
+    }
     if (demuxer->events & (DEMUX_EVENT_METADATA | DEMUX_EVENT_STREAMS))
         demux_update_replaygain(demuxer);
     if (demuxer->events & DEMUX_EVENT_DURATION)
@@ -4253,6 +4404,7 @@ int demuxer_add_chapter(demuxer_t *demuxer, char *name,
     };
     mp_tags_set_str(new.metadata, "TITLE", name);
     MP_TARRAY_APPEND(demuxer, demuxer->chapters, demuxer->num_chapters, new);
+    talloc_steal(demuxer->chapters, new.metadata);
     return demuxer->num_chapters - 1;
 }
 

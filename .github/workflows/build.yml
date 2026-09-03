@@ -440,6 +440,7 @@ jobs:
             libass:p
             libcdio-paranoia:p
             libdvdnav:p
+            libdvdread:p
             libjpeg-turbo:p
             libplacebo:p
             lua51:p

@@ -3917,6 +3917,12 @@ Window
 Disc Devices
 ------------
 
+``--disc-menu=<yes|no>``
+    When set, opening ``dvd://`` or ``bd://`` boots into the disc's interactive
+    menu instead of automatically playing the longest title (default: ``no``).
+    The menu can also be reached at any time via the synthetic "Disc Menu"
+    entry in the editions/titles list, or with ``discnav menu`` command.
+
 ``--cdda-device=<path>``
     Specify the CD device for CDDA playback. The default device path depends on
     the OS. See the `OPTICAL DRIVES`_ section.
@@ -3930,6 +3936,21 @@ Disc Devices
     .. admonition:: Example
 
         ``mpv dvd:// --dvd-device=/path/to/dvd/``
+
+``--dvda-device=<path>``
+    Specify the DVD-Audio device or .iso filename for ``dvda://`` playback.
+    You can also specify a directory that contains files previously copied
+    directly from a DVD-Audio disc. The default device path depends on
+    the OS. See the `OPTICAL DRIVES`_ section.
+
+    .. admonition:: Example
+
+        ``mpv dvda:// --dvda-device=/path/to/dvda/``
+
+``--dvda-page=<-1|0-...>``
+    Force the still picture page shown during DVD-Audio playback, instead of
+    the page scheduled for the current playback position (default: -1, use
+    the scheduled page).
 
 ``--bluray-device=<path>``
     Specify the Blu-ray disc location. Must be a directory with Blu-ray

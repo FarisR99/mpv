@@ -174,6 +174,15 @@ z and Z
 l
     Set/clear A-B loop points. See ``ab-loop`` command for details.
 
+Ctrl+m
+    Jump to the disc menu when playing a DVD or Blu-ray (see the ``discnav``
+    command). While a menu with a button highlight is on screen, the arrow
+    keys, ENTER, ESC/BACKSPACE and the mouse control the menu instead of
+    their usual functions.
+
+Ctrl+M
+    Show or hide the Blu-ray popup menu.
+
 L
     Toggle infinite looping.
 
@@ -1327,8 +1336,12 @@ PROTOCOLS
     Play a Blu-ray disc. Since libbluray 1.0.1, you can read from ISO files
     by passing them to ``--bluray-device``.
 
+    A Blu-ray ``.iso`` image passed directly (e.g. ``mpv disc.iso``) is also
+    detected and opened.
+
     ``title`` can be: ``longest`` or ``first`` (selects the default
-    playlist); ``mpls/<number>`` (selects <number>.mpls playlist);
+    playlist); ``menu`` (starts in the disc menu, see ``--disc-menu`` and the
+    ``discnav`` command); ``mpls/<number>`` (selects <number>.mpls playlist);
     ``<number>`` (select playlist with the same index). mpv will list
     the available playlists on loading.
 
@@ -1336,12 +1349,31 @@ PROTOCOLS
 
 ``dvd://[title][/device]`` ``--dvd-device=PATH``
 
-    Play a DVD. DVD menus are not supported. If no title is given, the longest
-    title is auto-selected. Without ``--dvd-device``, it will probably try
-    to open an actual optical drive, if available and implemented for the OS.
+    Play a DVD. If no title is given, the longest title is auto-selected.
+    ``title`` can also be ``menu`` to start in the disc menu (see
+    ``--disc-menu`` and the ``discnav`` command). Without ``--dvd-device``,
+    it will probably try to open an actual optical drive, if available and
+    implemented for the OS.
+
+    A DVD-Video ``.iso`` image passed directly (e.g. ``mpv disc.iso``) is also
+    detected and opened.
 
     ``dvdnav://`` is an old alias for ``dvd://`` and does exactly the same
     thing.
+
+``dvda://[title][/device]`` ``--dvda-device=PATH``
+
+    Play the AUDIO_TS zone of a DVD-Audio disc. Titles correspond to the
+    disc's audio groups, tracks are exposed as chapters. If no title is
+    given, the longest title is auto-selected. Menus are not supported.
+
+    Still images (ASVS), such as cover art or booklet pages a disc associates
+    with its tracks, are exposed as a video track and shown by default. Can be
+    disabled with ``--vid=no``.
+
+    A DVD-Audio ``.iso`` image passed directly (e.g. ``mpv disc.iso``) is also
+    detected and opened. For hybrid discs, the DVD-Audio zone is preferred over
+    the DVD-Video zone.
 
 ``dvb://[cardnumber@]channel`` ``--dvbin-...``
 
