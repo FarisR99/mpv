@@ -1044,15 +1044,18 @@ Program Behavior
 
         I have no idea.
 
-``--ytdl-format=<|ytdl|best|worst|mp4|webm|...>``
+``--ytdl-format=<ytdl|best|worst|mp4|webm|...>``
     Format selection string that is directly passed to youtube-dl.
     The possible values are specific to the website and the video, for a given
     URL the available formats can be found with the command
     ``youtube-dl -F URL``. See youtube-dl's documentation for available aliases.
-    (Default: empty)
+    (Default: ``bestvideo*+bestaudio/bestvideo+bestaudio/best``)
 
-    An empty value or ``ytdl`` does not pass a ``--format`` option to youtube-dl
-    at all, and thus uses its default format selection behavior.
+    The default selects the best separate video and audio tracks with a muxed
+    fallback.
+
+    The ``ytdl`` value does not pass a ``--format`` option to youtube-dl at
+    all, and thus does not override its default.
 
 ``--ytdl-raw-options=<key>=<value>[,<key>=<value>[,...]]``
     Pass arbitrary options to youtube-dl. Parameter and argument should be
@@ -2132,11 +2135,16 @@ Audio
     List of codecs for which compressed audio passthrough should be used. This
     works for both classic S/PDIF and HDMI.
 
-    Possible codecs are ``ac3``, ``dts``, ``dts-hd``, ``eac3``, ``truehd``.
-    Multiple codecs can be specified by separating them with ``,``. ``dts``
-    refers to low bitrate DTS core, while ``dts-hd`` refers to DTS MA (receiver
-    and OS support varies). If both ``dts`` and ``dts-hd`` are specified, it
-    behaves equivalent to specifying ``dts-hd`` only.
+    Possible codecs are ``ac3``, ``dts``, ``dts-hd``, ``eac3``, ``truehd``,
+    ``dsd``. Multiple codecs can be specified by separating them with ``,``.
+    ``dts`` refers to low bitrate DTS core, while ``dts-hd`` refers to DTS MA
+    (receiver and OS support varies). If both ``dts`` and ``dts-hd`` are
+    specified, it behaves equivalent to specifying ``dts-hd`` only.
+
+    ``dsd`` enables bit-perfect passthrough of DSD audio, requires an audio
+    output with exclusive device access (currently ``wasapi``) and a DAC that
+    accepts DoP at the resulting PCM rate (176.4 kHz for DSD64, 352.8 kHz for
+    DSD128, and so on).
 
     In earlier mpv versions you could use ``--ad`` to force the spdif wrapper.
     This does not work anymore.
@@ -4534,6 +4542,11 @@ Input
 ``--input-builtin-drag-and-drop=<yes|no>``
     Enable the built-in drag-and-drop behavior (default: yes). Setting it to no
     disables the built-in drag-and-drop handling.
+
+    .. admonition:: Note (macOS)
+
+        This also affects the drag and drop behavior on the Dock Icon and
+        loading files from Finder, since both cases can't be distinguished.
 
 ``--input-cmdlist``
     Prints all commands that can be bound to keys.
@@ -7008,15 +7021,10 @@ them.
 
     Windows with ANGLE only.
 
-``--angle-renderer=<d3d9|d3d11|auto>``
-    Forces a specific renderer when using the ANGLE backend (default: auto). In
-    auto mode this will pick D3D11 for systems that support Direct3D 11 feature
-    level 9_3 or higher, and D3D9 otherwise. This option is mainly for
-    debugging purposes. Normally there is no reason to force a specific
-    renderer, though ``--angle-renderer=d3d9`` may give slightly better
-    performance on old hardware. Note that the D3D9 renderer only supports
-    OpenGL ES 2.0, so most extended OpenGL features will not work if this
-    renderer is selected (similar to ``--gpu-dumb-mode``).
+``--angle-renderer=<d3d11|auto>``
+    Forces a specific renderer when using the ANGLE backend (default: auto).
+    This option is mainly for debugging purposes. Normally there is no reason
+    to force a specific renderer.
 
     Windows with ANGLE only.
 

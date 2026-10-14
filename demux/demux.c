@@ -2340,6 +2340,10 @@ static bool read_packet(struct demux_internal *in)
     // safe-guards against packet queue overflow.
     bool read_more = false, prefetch_more = false, refresh_more = false;
     uint64_t total_fw_bytes = 0;
+    for (int n = 0; n < in->num_streams; n++)
+        total_fw_bytes += get_forward_buffered_bytes(in->streams[n]->ds);
+    if (in->hyst_bytes > 0 && total_fw_bytes <= in->hyst_bytes)
+        in->hyst_active = false;
     for (int n = 0; n < in->num_streams; n++) {
         struct demux_stream *ds = in->streams[n]->ds;
         if (ds->eager) {
@@ -2364,12 +2368,6 @@ static bool read_packet(struct demux_internal *in)
             if (!in->hyst_active)
                 prefetch_more |= ds->queue->last_ts - ds->base_ts < in->min_secs;
         }
-        total_fw_bytes += get_forward_buffered_bytes(ds);
-    }
-
-    if (in->hyst_bytes > 0 && total_fw_bytes <= in->hyst_bytes) {
-        in->hyst_active = false;
-        prefetch_more |= true;
     }
 
     // While interactive disc navigation is active, never read ahead. It would
@@ -3517,6 +3515,7 @@ struct parent_stream_info {
     int stream_origin;
     struct mp_cancel *cancel;
     char *filename;
+    char *server_filename;
 };
 
 static struct demuxer *open_given_type(struct mpv_global *global,
@@ -3550,13 +3549,14 @@ static struct demuxer *open_given_type(struct mpv_global *global,
         .packet_pool = demux_packet_pool_get(global),
         .glog = log,
         .filename = talloc_strdup(demuxer, sinfo->filename),
+        .server_filename = talloc_strdup(demuxer, sinfo->server_filename),
         .is_network = sinfo->is_network,
         .is_streaming = sinfo->is_streaming,
         .stream_origin = sinfo->stream_origin,
         .access_references = opts->access_references,
         .opts = opts,
         .opts_cache = opts_cache,
-        .events = DEMUX_EVENT_ALL,
+        .events = DEMUX_EVENT_INIT | DEMUX_EVENT_DURATION | DEMUX_EVENT_METADATA | DEMUX_EVENT_STREAMS,
         .duration = -1,
         .depth = params ? params->depth : 0,
     };
@@ -3617,7 +3617,7 @@ static struct demuxer *open_given_type(struct mpv_global *global,
         demux_copy(in->d_user, in->d_thread);
         in->duration = in->d_thread->duration;
         demuxer_sort_chapters(demuxer);
-        in->events = DEMUX_EVENT_ALL;
+        in->events = DEMUX_EVENT_INIT | DEMUX_EVENT_DURATION | DEMUX_EVENT_METADATA | DEMUX_EVENT_STREAMS;
 
         struct demuxer *sub = NULL;
         if (!(params && params->disable_timeline)) {
@@ -3679,6 +3679,7 @@ static struct demuxer *demux_open(struct stream *stream,
         .stream_origin = stream->stream_origin,
         .cancel = cancel,
         .filename = talloc_strdup(NULL, stream->url),
+        .server_filename = stream->server_filename,
     };
 
     if (!force_format)

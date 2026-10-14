@@ -1891,6 +1891,12 @@ static void reinit_scaler(struct gl_video *p, struct scaler *scaler,
     float *weights = talloc_array(NULL, float, lut_size * stride);
     mp_compute_lut(scaler->kernel, lut_size, stride, weights);
 
+    for (int n = 0; n < lut_size; n++) {
+        float *row = weights + n * stride;
+        for (int i = size; i < stride; i++)
+            row[i] = row[i - num_components];
+    }
+
     bool use_1d = scaler->kernel->polar && (p->ra->caps & RA_CAP_TEX_1D);
 
     struct ra_tex_params lut_params = {
@@ -3792,12 +3798,6 @@ void gl_video_set_clear_color(struct gl_video *p, struct m_color c)
 void gl_video_set_osd_pts(struct gl_video *p, double pts)
 {
     p->osd_pts = pts;
-}
-
-bool gl_video_check_osd_change(struct gl_video *p, struct mp_osd_res *res,
-                               double pts)
-{
-    return p->osd ? mpgl_osd_check_change(p->osd, res, pts) : false;
 }
 
 void gl_video_resize(struct gl_video *p,

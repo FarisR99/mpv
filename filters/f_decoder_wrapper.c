@@ -262,7 +262,7 @@ static int decoder_list_help(struct mp_log *log, const m_option_t *opt,
         return M_OPT_EXIT;
     }
     if (strcmp(opt->name, "audio-spdif") == 0) {
-        mp_info(log, "Choices: ac3,dts-hd,dts (and possibly more)\n");
+        mp_info(log, "Choices: ac3,dts-hd,dts,dsd (and possibly more)\n");
         return M_OPT_EXIT;
     }
     return 1;
@@ -454,6 +454,14 @@ static bool reinit_decoder(struct priv *p)
                 list = spdif;
             } else {
                 talloc_free(spdif);
+                struct mp_decoder_list *dsd =
+                    select_dsd_codec(p->codec->codec, p->opts->audio_spdif);
+                if (dsd->num_entries) {
+                    driver = &ad_dsd;
+                    list = dsd;
+                } else {
+                    talloc_free(dsd);
+                }
             }
         }
     }
@@ -670,7 +678,8 @@ static void fix_image_params(struct priv *p,
     if (m.p_w <= 0 || m.p_h <= 0)
         m.p_w = m.p_h = 1;
 
-    m.stereo3d = p->codec->stereo_mode;
+    if (!m.stereo3d)
+        m.stereo3d = p->codec->stereo_mode;
 
     if (!mp_rect_equals(&p->codec->crop, &(struct mp_rect){0})) {
         struct mp_rect crop = p->codec->crop;
