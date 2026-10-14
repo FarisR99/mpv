@@ -195,6 +195,8 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
 
     ok = true;
 done:
+    if (priv->ctx->debug_marker)
+        priv->ctx->debug_marker(priv->ctx, "after rendering");
     if (!ok)
         TA_FREEP(&res);
     return res;

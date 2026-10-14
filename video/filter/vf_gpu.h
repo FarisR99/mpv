@@ -27,6 +27,7 @@ struct offscreen_ctx {
     void *priv;
 
     void (*set_context)(struct offscreen_ctx *ctx, bool enable);
+    void (*debug_marker)(struct offscreen_ctx *ctx, const char *msg);
 };
 
 struct offscreen_context {

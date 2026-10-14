@@ -23,6 +23,7 @@
 #include <dwmapi.h>
 
 #include "common/common.h"
+#include "options/m_config.h"
 #include "osdep/windows_utils.h"
 #include "video/filter/vf_gpu.h"
 #include "video/out/opengl/angle_dynamic.h"
@@ -39,6 +40,9 @@ struct gl_offscreen_ctx
 
     ID3D11Device *d3d11_device;
     ID3D11DeviceContext *d3d11_context;
+
+    IDXGIDebug *debug;
+    IDXGIInfoQueue *iqueue;
 
     EGLConfig egl_config;
     EGLDisplay egl_display;
@@ -63,13 +67,19 @@ static void d3d11_device_destroy(struct offscreen_ctx *ctx)
 
     SAFE_RELEASE(p->d3d11_context);
     SAFE_RELEASE(p->d3d11_device);
+
+    if (p->debug)
+        mp_d3d11_report_live_objects(ctx->log, p->debug, p->iqueue);
+    SAFE_RELEASE(p->debug);
+    SAFE_RELEASE(p->iqueue);
 }
 
-static bool d3d11_device_create(struct offscreen_ctx *ctx)
+static bool d3d11_device_create(struct offscreen_ctx *ctx, bool debug)
 {
     struct gl_offscreen_ctx *p = ctx->priv;
 
     struct d3d11_device_opts device_opts = {
+        .debug = debug,
         .allow_warp = -1 != 0,
         .force_warp = -1 == 1,
         .max_feature_level = D3D_FEATURE_LEVEL_11_0,
@@ -79,6 +89,9 @@ static bool d3d11_device_create(struct offscreen_ctx *ctx)
     if (!mp_d3d11_create_present_device(ctx->log, &device_opts, &p->d3d11_device))
         return false;
     ID3D11Device_GetImmediateContext(p->d3d11_device, &p->d3d11_context);
+
+    if (ID3D11Device_GetCreationFlags(p->d3d11_device) & D3D11_CREATE_DEVICE_DEBUG)
+        mp_d3d11_get_debug_interfaces(ctx->log, &p->debug, &p->iqueue);
 
     PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXT =
         (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
@@ -119,16 +132,31 @@ static void gl_ctx_destroy(void *p)
     struct offscreen_ctx *ctx = p;
     struct gl_offscreen_ctx *gl = ctx->priv;
 
+    if (gl->egl_context)
+        eglMakeCurrent(gl->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                       gl->egl_context);
+
     // Clean up any potentially left-over debug callback
     if (ctx->ra)
         ra_gl_set_debug(ctx->ra, false);
     ra_free(&ctx->ra);
 
-    // Uninit the EGL device implementation that is being used
-    d3d11_device_destroy(ctx);
-
-    if (gl->egl_context)
+    if (gl->egl_context) {
+        eglMakeCurrent(gl->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                       EGL_NO_CONTEXT);
         eglDestroyContext(gl->egl_display, gl->egl_context);
+    }
+    gl->egl_context = EGL_NO_CONTEXT;
+
+    // Release EGL resources before reporting live D3D11 objects.
+    d3d11_device_destroy(ctx);
+}
+
+static void gl_ctx_debug_marker(struct offscreen_ctx *ctx, const char *msg)
+{
+    struct gl_offscreen_ctx *gl = ctx->priv;
+    if (gl->iqueue)
+        mp_d3d11_debug_marker(ctx->log, gl->iqueue, msg);
 }
 
 static void gl_ctx_set_context(struct offscreen_ctx *ctx, bool enable)
@@ -144,9 +172,6 @@ static bool context_init(struct offscreen_ctx *ctx)
 {
     struct gl_offscreen_ctx *gl = ctx->priv;
 
-    // This appears to work with Mesa. EGL 1.5 doesn't specify what a "default
-    // display" is at all.
-    gl->egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (!eglInitialize(gl->egl_display, NULL, NULL))
     {
         MP_ERR(ctx, "Could not initialize EGL.\n");
@@ -164,11 +189,11 @@ static struct offscreen_ctx *gl_offscreen_ctx_create(struct mpv_global *global,
 {
     struct offscreen_ctx *ctx = talloc(NULL, struct offscreen_ctx);
     struct gl_offscreen_ctx *gl = talloc_zero(ctx, struct gl_offscreen_ctx);
-    talloc_set_destructor(ctx, gl_ctx_destroy);
     *ctx = (struct offscreen_ctx){
         .log = log,
         .priv = gl,
         .set_context = gl_ctx_set_context,
+        .debug_marker = gl_ctx_debug_marker,
     };
 
     if (!angle_load())
@@ -176,15 +201,23 @@ static struct offscreen_ctx *gl_offscreen_ctx_create(struct mpv_global *global,
         mp_verbose(log, "Failed to load LIBEGL.DLL\n");
         goto error;
     }
+    talloc_set_destructor(ctx, gl_ctx_destroy);
+
+    // The EGL helper requires an ra_ctx; provide a stub with renderer options.
+    struct ra_ctx_opts *ctx_opts = mp_get_config_group(ctx, global, &ra_ctx_conf);
+    struct ra_ctx ractx = {
+        .log = ctx->log,
+        .global = global,
+        .opts = *ctx_opts,
+    };
+    talloc_free(ctx_opts);
 
     // Create the underlying EGL device implementation
-    bool context_ok = d3d11_device_create(ctx);
+    bool context_ok = d3d11_device_create(ctx, ractx.opts.debug);
     if (context_ok)
     {
         MP_VERBOSE(ctx, "Using Direct3D 11\n");
         context_ok = context_init(ctx);
-        if (!context_ok)
-            d3d11_device_destroy(ctx);
     }
     if (!context_ok)
     {
@@ -192,12 +225,6 @@ static struct offscreen_ctx *gl_offscreen_ctx_create(struct mpv_global *global,
         goto error;
     }
 
-    // Unfortunately, mpegl_create_context() is entangled with ra_ctx.
-    // Fortunately, it does not need much, and we can provide a stub.
-    struct ra_ctx ractx = {
-        .log = ctx->log,
-        .global = global,
-    };
     if (!mpegl_create_context(&ractx, gl->egl_display, &gl->egl_context,
                               &gl->egl_config))
     {
@@ -223,7 +250,6 @@ static struct offscreen_ctx *gl_offscreen_ctx_create(struct mpv_global *global,
     return ctx;
 
 error:
-    d3d11_device_destroy(ctx);
     talloc_free(ctx);
     return NULL;
 }

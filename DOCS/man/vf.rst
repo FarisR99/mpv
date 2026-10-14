@@ -908,6 +908,10 @@ Available mpv-only filters are:
             EGL (default if available)
         vulkan
             Vulkan
+        angle
+            ANGLE via Direct3D 11 (Windows only). ``--gpu-debug`` enables the
+            D3D11 debug layer, logs messages after rendering, and reports live
+            objects when the filter is destroyed.
 
     ``w=<pixels>``, ``h=<pixels>``
         Size of the output in pixels (default: 0). If not positive, this will
