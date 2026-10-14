@@ -110,7 +110,8 @@ bool gl_read_fbo_contents(GL *gl, int fbo, int dir, GLenum format, GLenum type,
     gl->BindFramebuffer(GL_FRAMEBUFFER, fbo);
     GLenum obj = fbo ? GL_COLOR_ATTACHMENT0 : GL_FRONT;
     gl->PixelStorei(GL_PACK_ALIGNMENT, 1);
-    gl->ReadBuffer(obj);
+    if (gl->ReadBuffer)
+        gl->ReadBuffer(obj);
     // reading by line allows flipping, and avoids stride-related trouble
     int y1 = dir > 0 ? 0 : h;
     for (int y = 0; y < h; y++)
