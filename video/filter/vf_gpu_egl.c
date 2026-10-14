@@ -16,6 +16,7 @@
  */
 
 #include "common/common.h"
+#include "options/m_config.h"
 #include "video/filter/vf_gpu.h"
 #include "video/out/opengl/egl_helpers.h"
 #include "video/out/opengl/ra_gl.h"
@@ -31,10 +32,18 @@ static void gl_ctx_destroy(void *p)
     struct offscreen_ctx *ctx = p;
     struct gl_offscreen_ctx *gl = ctx->priv;
 
+    if (gl->egl_context && ctx->ra &&
+        eglMakeCurrent(gl->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                       gl->egl_context))
+        ra_gl_set_debug(ctx->ra, false);
     ra_free(&ctx->ra);
 
-    if (gl->egl_context)
+    if (gl->egl_context) {
+        eglMakeCurrent(gl->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                       EGL_NO_CONTEXT);
         eglDestroyContext(gl->egl_display, gl->egl_context);
+    }
+    gl->egl_context = EGL_NO_CONTEXT;
 }
 
 static bool gl_ctx_set_context(struct offscreen_ctx *ctx, bool enable)
@@ -71,10 +80,13 @@ static struct offscreen_ctx *gl_offscreen_ctx_create(struct mpv_global *global,
 
     // Unfortunately, mpegl_create_context() is entangled with ra_ctx.
     // Fortunately, it does not need much, and we can provide a stub.
+    struct ra_ctx_opts *ctx_opts = mp_get_config_group(ctx, global, &ra_ctx_conf);
     struct ra_ctx ractx = {
         .log = ctx->log,
         .global = global,
+        .opts = *ctx_opts,
     };
+    talloc_free(ctx_opts);
     EGLConfig config;
     if (!mpegl_create_context(&ractx, gl->egl_display, &gl->egl_context, &config))
     {

@@ -905,7 +905,8 @@ Available mpv-only filters are:
         ``help`` to get a complete list of compiled in backends.
 
         egl
-            EGL (default if available)
+            EGL (default if available). ``--gpu-debug`` requests an OpenGL
+            debug context.
         vulkan
             Vulkan
         angle
