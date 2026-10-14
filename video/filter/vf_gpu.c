@@ -16,6 +16,7 @@
  */
 
 #include "common/common.h"
+#include "filters/f_autoconvert.h"
 #include "filters/filter.h"
 #include "filters/filter_internal.h"
 #include "filters/user_filters.h"
@@ -23,6 +24,7 @@
 #include "options/m_option.h"
 #include "options/options.h"
 #include "video/filter/vf_gpu.h"
+#include "video/img_format.h"
 #include "video/out/aspect.h"
 #include "video/out/gpu/video.h"
 
@@ -97,6 +99,7 @@ struct priv {
     struct offscreen_ctx *ctx;
     struct gl_video *renderer;
     struct ra_tex *target;
+    struct mp_pin *in_pin;
 
     struct mp_image_params img_params;
     uint64_t next_frame_id;
@@ -206,10 +209,10 @@ static void gpu_process(struct mp_filter *f)
 {
     struct priv *priv = f->priv;
 
-    if (!mp_pin_can_transfer_data(f->ppins[1], f->ppins[0]))
+    if (!mp_pin_can_transfer_data(f->ppins[1], priv->in_pin))
         return;
 
-    struct mp_frame frame = mp_pin_out_read(f->ppins[0]);
+    struct mp_frame frame = mp_pin_out_read(priv->in_pin);
 
     if (mp_frame_is_signaling(frame)) {
         mp_pin_in_write(f->ppins[1], frame);
@@ -310,6 +313,21 @@ static struct mp_filter *gpu_create(struct mp_filter *parent, void *options)
     mp_assert(priv->renderer); // can't fail (strangely)
 
     offscreen_ctx_set_current(priv->ctx, false);
+
+    struct mp_autoconvert *conv = mp_autoconvert_create(f);
+    if (!conv)
+        goto error;
+
+    // Pass supported software frames through unchanged; download hardware
+    // frames and convert unsupported formats before uploading to the renderer.
+    for (int imgfmt = IMGFMT_START + 1; imgfmt < IMGFMT_END; imgfmt++) {
+        struct mp_imgfmt_desc desc = mp_imgfmt_get_desc(imgfmt);
+        if (!(desc.flags & MP_IMGFLAG_HWACCEL) &&
+            gl_video_check_format(priv->renderer, imgfmt))
+            mp_autoconvert_add_imgfmt(conv, imgfmt, 0);
+    }
+    mp_pin_connect(conv->f->pins[0], f->ppins[0]);
+    priv->in_pin = conv->f->pins[1];
 
     // MP_WARN(f, "This is experimental. Keep in mind:\n");
     // MP_WARN(f, " - OSD rendering is done in software.\n");
