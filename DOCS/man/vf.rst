@@ -912,6 +912,13 @@ Available mpv-only filters are:
             ANGLE via Direct3D 11 (Windows only). ``--gpu-debug`` enables the
             D3D11 debug layer, logs messages after rendering, and reports live
             objects when the filter is destroyed.
+            ``--angle-d3d11-warp`` and ``--angle-d3d11-feature-level`` control
+            device creation.
+        d3d11
+            Direct3D 11 via libplacebo (Windows only). ``--d3d11-adapter``,
+            ``--d3d11-warp`` and ``--d3d11-feature-level`` control device
+            creation. With WARP set to ``auto``, ``--gpu-sw`` controls software
+            fallback. Presentation options such as VSync do not apply.
 
     ``w=<pixels>``, ``h=<pixels>``
         Size of the output in pixels (default: 0). If not positive, this will

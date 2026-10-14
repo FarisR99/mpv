@@ -73,6 +73,7 @@ static struct offscreen_ctx *d3d11_offscreen_ctx_create(struct mpv_global *globa
     p->opts = p->opts_cache->opts;
 
     struct mpd3d11_ctx *d3d = talloc_zero(ctx, struct mpd3d11_ctx);
+    IDXGIAdapter1 *adapter = NULL;
 
     d3d->pllog = mppl_log_create(ctx, log);
     if (!d3d->pllog)
@@ -81,11 +82,25 @@ static struct offscreen_ctx *d3d11_offscreen_ctx_create(struct mpv_global *globa
     struct pl_d3d11_params pl_d3d_params = {0};
     struct ra_ctx_opts *ctx_opts = mp_get_config_group(NULL, global, &ra_ctx_conf);
     pl_d3d_params.debug = ctx_opts->debug;
-    pl_d3d_params.allow_software = ctx_opts->allow_sw;
+    // Keep the existing gpu-sw policy for auto, but honor explicit WARP choices.
+    pl_d3d_params.allow_software = p->opts->warp == 1 ||
+                                  (p->opts->warp < 0 && ctx_opts->allow_sw);
+    pl_d3d_params.force_software = p->opts->warp == 1;
+    pl_d3d_params.max_feature_level = p->opts->feature_level;
     talloc_free(ctx_opts);
+
+    if (!pl_d3d_params.force_software && p->opts->adapter_name &&
+        p->opts->adapter_name[0])
+    {
+        adapter = mp_get_dxgi_adapter(log, bstr0(p->opts->adapter_name), NULL);
+        if (!adapter)
+            mp_warn(log, "Requested D3D11 adapter was not found; using the default.\n");
+        pl_d3d_params.adapter = (IDXGIAdapter *)adapter;
+    }
     mppl_log_set_probing(d3d->pllog, true);
     mp_verbose(ctx->log, "Creating D3D11 device\n");
     d3d->d3d11 = pl_d3d11_create(d3d->pllog, &pl_d3d_params);
+    SAFE_RELEASE(adapter);
     mppl_log_set_probing(d3d->pllog, false);
     if (!d3d->d3d11)
         goto error;
@@ -110,6 +125,7 @@ static struct offscreen_ctx *d3d11_offscreen_ctx_create(struct mpv_global *globa
 
     return ctx;
 error:
+    SAFE_RELEASE(adapter);
     pl_d3d11_destroy(&d3d->d3d11);
     pl_log_destroy(&d3d->pllog);
     talloc_free(d3d);

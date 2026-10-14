@@ -32,6 +32,7 @@
 #include "video/out/w32_common.h"
 #include "osdep/windows_utils.h"
 #include "context.h"
+#include "context_angle.h"
 #include "utils.h"
 
 #ifndef EGL_D3D_TEXTURE_ANGLE
@@ -46,14 +47,6 @@
 enum {
     RENDERER_AUTO,
     RENDERER_D3D11,
-};
-
-struct angle_opts {
-    int renderer;
-    int d3d11_warp;
-    int d3d11_feature_level;
-    int egl_windowing;
-    bool flip;
 };
 
 #define OPT_BASE_STRUCT struct angle_opts

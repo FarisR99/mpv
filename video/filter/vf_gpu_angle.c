@@ -29,6 +29,7 @@
 #include "video/out/opengl/angle_dynamic.h"
 #include "video/out/opengl/common.h"
 #include "video/out/opengl/context.h"
+#include "video/out/opengl/context_angle.h"
 #include "video/out/opengl/egl_helpers.h"
 #include "video/out/opengl/ra_gl.h"
 #include "video/out/opengl/utils.h"
@@ -74,15 +75,16 @@ static void d3d11_device_destroy(struct offscreen_ctx *ctx)
     SAFE_RELEASE(p->iqueue);
 }
 
-static bool d3d11_device_create(struct offscreen_ctx *ctx, bool debug)
+static bool d3d11_device_create(struct offscreen_ctx *ctx, bool debug,
+                                const struct angle_opts *opts)
 {
     struct gl_offscreen_ctx *p = ctx->priv;
 
     struct d3d11_device_opts device_opts = {
         .debug = debug,
-        .allow_warp = -1 != 0,
-        .force_warp = -1 == 1,
-        .max_feature_level = D3D_FEATURE_LEVEL_11_0,
+        .allow_warp = opts->d3d11_warp != 0,
+        .force_warp = opts->d3d11_warp == 1,
+        .max_feature_level = opts->d3d11_feature_level,
         .min_feature_level = D3D_FEATURE_LEVEL_9_3,
         .max_frame_latency = 3,
     };
@@ -216,7 +218,9 @@ static struct offscreen_ctx *gl_offscreen_ctx_create(struct mpv_global *global,
     talloc_free(ctx_opts);
 
     // Create the underlying EGL device implementation
-    bool context_ok = d3d11_device_create(ctx, ractx.opts.debug);
+    struct angle_opts *angle_opts = mp_get_config_group(ctx, global, &angle_conf);
+    bool context_ok = d3d11_device_create(ctx, ractx.opts.debug, angle_opts);
+    talloc_free(angle_opts);
     if (context_ok)
     {
         MP_VERBOSE(ctx, "Using Direct3D 11\n");
