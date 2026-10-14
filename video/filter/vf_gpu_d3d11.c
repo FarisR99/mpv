@@ -61,7 +61,6 @@ static struct offscreen_ctx *d3d11_offscreen_ctx_create(struct mpv_global *globa
                                                         struct mp_log *log)
 {
     struct offscreen_ctx *ctx = talloc(NULL, struct offscreen_ctx);
-    talloc_set_destructor(ctx, d3d11_ctx_destroy);
     *ctx = (struct offscreen_ctx){
         .log = log};
 
@@ -107,6 +106,7 @@ static struct offscreen_ctx *d3d11_offscreen_ctx_create(struct mpv_global *globa
 
     ctx->ra = ractx->ra;
     ctx->priv = d3d11ctx;
+    talloc_set_destructor(ctx, d3d11_ctx_destroy);
 
     return ctx;
 error:
