@@ -103,6 +103,8 @@ struct priv {
 
     struct mp_image_params img_params;
     uint64_t next_frame_id;
+    bool restore_subs_in_filter;
+    bool prev_subs_in_filter;
 };
 
 static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *in)
@@ -148,6 +150,11 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         struct mp_stream_info *info = mp_filter_find_stream_info(f);
         struct osd_state *osd_state = info ? info->osd : NULL;
         if (osd_state) {
+            if (!priv->restore_subs_in_filter) {
+                priv->prev_subs_in_filter =
+                    osd_get_render_subs_in_filter(osd_state);
+                priv->restore_subs_in_filter = true;
+            }
             osd_set_render_subs_in_filter(osd_state, true);
             // Assume the osd_state doesn't somehow disappear.
             gl_video_set_osd_source(priv->renderer, osd_state);
@@ -270,6 +277,13 @@ static void gpu_destroy(struct mp_filter *f)
     }
 
     talloc_free(priv->ctx);
+
+    if (priv->restore_subs_in_filter) {
+        struct mp_stream_info *info = mp_filter_find_stream_info(f);
+        struct osd_state *osd = info ? info->osd : NULL;
+        if (osd)
+            osd_set_render_subs_in_filter(osd, priv->prev_subs_in_filter);
+    }
 }
 
 static const struct mp_filter_info gpu_filter = {
