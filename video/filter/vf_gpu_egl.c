@@ -37,13 +37,16 @@ static void gl_ctx_destroy(void *p)
         eglDestroyContext(gl->egl_display, gl->egl_context);
 }
 
-static void gl_ctx_set_context(struct offscreen_ctx *ctx, bool enable)
+static bool gl_ctx_set_context(struct offscreen_ctx *ctx, bool enable)
 {
     struct gl_offscreen_ctx *gl = ctx->priv;
     EGLContext c = enable ? gl->egl_context : EGL_NO_CONTEXT;
 
-    if (!eglMakeCurrent(gl->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, c))
+    if (!eglMakeCurrent(gl->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, c)) {
         MP_ERR(ctx, "Could not make EGL context current.\n");
+        return false;
+    }
+    return true;
 }
 
 static struct offscreen_ctx *gl_offscreen_ctx_create(struct mpv_global *global,
@@ -92,7 +95,8 @@ static struct offscreen_ctx *gl_offscreen_ctx_create(struct mpv_global *global,
     if (!ctx->ra)
         goto error;
 
-    gl_ctx_set_context(ctx, false);
+    if (!gl_ctx_set_context(ctx, false))
+        goto error;
 
     return ctx;
 

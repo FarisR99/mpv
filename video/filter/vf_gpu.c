@@ -80,10 +80,11 @@ static struct offscreen_ctx *offscreen_ctx_create(struct mpv_global *global,
     return NULL;
 }
 
-static void offscreen_ctx_set_current(struct offscreen_ctx *ctx, bool enable)
+static bool offscreen_ctx_set_current(struct offscreen_ctx *ctx, bool enable)
 {
     if (ctx->set_context)
-        ctx->set_context(ctx, enable);
+        return ctx->set_context(ctx, enable);
+    return true;
 }
 
 struct gpu_opts {
@@ -215,6 +216,7 @@ done:
 static void gpu_process(struct mp_filter *f)
 {
     struct priv *priv = f->priv;
+    bool context_current = false;
 
     if (!mp_pin_can_transfer_data(f->ppins[1], priv->in_pin))
         return;
@@ -229,7 +231,9 @@ static void gpu_process(struct mp_filter *f)
     if (frame.type != MP_FRAME_VIDEO)
         goto error;
 
-    offscreen_ctx_set_current(priv->ctx, true);
+    if (!offscreen_ctx_set_current(priv->ctx, true))
+        goto error;
+    context_current = true;
 
     struct mp_image *mpi = frame.data;
     struct mp_image *res = gpu_render_frame(f, mpi);
@@ -254,6 +258,12 @@ static void gpu_process(struct mp_filter *f)
     res->params.repr.levels = target->repr.levels;
     res->params.light = target->light;
 
+    if (!offscreen_ctx_set_current(priv->ctx, false)) {
+        talloc_free(res);
+        goto error;
+    }
+    context_current = false;
+
     talloc_free(mpi);
 
     mp_pin_in_write(f->ppins[1], MAKE_FRAME(MP_FRAME_VIDEO, res));
@@ -262,16 +272,21 @@ static void gpu_process(struct mp_filter *f)
 error:
     mp_frame_unref(&frame);
     mp_filter_internal_mark_failed(f);
-    offscreen_ctx_set_current(priv->ctx, false);
+    if (context_current)
+        offscreen_ctx_set_current(priv->ctx, false);
 }
 
 static void gpu_reset(struct mp_filter *f)
 {
     struct priv *priv = f->priv;
 
-    offscreen_ctx_set_current(priv->ctx, true);
+    if (!offscreen_ctx_set_current(priv->ctx, true)) {
+        mp_filter_internal_mark_failed(f);
+        return;
+    }
     gl_video_reset(priv->renderer);
-    offscreen_ctx_set_current(priv->ctx, false);
+    if (!offscreen_ctx_set_current(priv->ctx, false))
+        mp_filter_internal_mark_failed(f);
 }
 
 static void gpu_destroy(struct mp_filter *f)
@@ -332,12 +347,14 @@ static struct mp_filter *gpu_create(struct mp_filter *parent, void *options)
         goto error;
     }
 
-    offscreen_ctx_set_current(priv->ctx, true);
+    if (!offscreen_ctx_set_current(priv->ctx, true))
+        goto error;
 
     priv->renderer = gl_video_init(priv->ctx->ra, f->log, f->global);
     mp_assert(priv->renderer); // can't fail (strangely)
 
-    offscreen_ctx_set_current(priv->ctx, false);
+    if (!offscreen_ctx_set_current(priv->ctx, false))
+        goto error;
 
     struct mp_autoconvert *conv = mp_autoconvert_create(f);
     if (!conv)
