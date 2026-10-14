@@ -2948,6 +2948,7 @@ static void pass_colormanage(struct gl_video *p, struct pl_color_space src,
             .h = mp_rect_h(p->dst_rect),
             .color = dst,
             .repr = {.sys = PL_COLOR_SYSTEM_RGB, .levels = cparams.levels_out},
+            .light = dst_light,
             .rotate = p->image_params.rotate,
         };
     }

@@ -238,10 +238,21 @@ static void gpu_process(struct mp_filter *f)
         goto error;
     }
 
-    // It's not clear which parameters to copy.
+    // Preserve frame timing, but describe the rendered pixels rather than the
+    // source color space, crop, orientation, or pixel aspect ratio.
     res->pts = mpi->pts;
     res->dts = mpi->dts;
+    res->pkt_duration = mpi->pkt_duration;
     res->nominal_fps = mpi->nominal_fps;
+    res->pict_type = mpi->pict_type;
+    res->fields = mpi->fields;
+
+    const struct mp_image_params *target =
+        gl_video_get_target_params_ptr(priv->renderer);
+    res->params.color = target->color;
+    res->params.repr.sys = target->repr.sys;
+    res->params.repr.levels = target->repr.levels;
+    res->params.light = target->light;
 
     talloc_free(mpi);
 
