@@ -4,9 +4,13 @@
 #include "ra_pl.h"
 #include "utils.h"
 
+#include <libplacebo/dispatch.h>
+#include <libplacebo/shaders/custom.h>
+
 struct ra_pl {
     pl_gpu gpu;
     struct ra_timer_pl *active_timer;
+    pl_dispatch clear_dispatch;
 };
 
 static inline pl_gpu get_gpu(const struct ra *ra)
@@ -135,6 +139,8 @@ struct ra *ra_create_pl(pl_gpu gpu, struct mp_log *log)
 
 static void destroy_ra_pl(struct ra *ra)
 {
+    struct ra_pl *p = ra->priv;
+    pl_dispatch_destroy(&p->clear_dispatch);
     talloc_free(ra);
 }
 
@@ -311,6 +317,38 @@ static bool buf_poll_pl(struct ra *ra, struct ra_buf *buf)
 static void clear_pl(struct ra *ra, struct ra_tex *dst, float color[4],
                      struct mp_rect *scissor)
 {
+    struct ra_pl *p = ra->priv;
+    pl_tex tex = dst->priv;
+    if (!tex->params.blit_dst) {
+        // Wrapped render targets (notably D3D11 BGRA without UAV support)
+        // can be renderable without supporting libplacebo's clear/blit API.
+        if (!p->clear_dispatch)
+            p->clear_dispatch = pl_dispatch_create(p->gpu->log, p->gpu);
+        pl_shader sh = pl_dispatch_begin(p->clear_dispatch);
+        bool ok = pl_shader_custom(sh, &(struct pl_custom_shader) {
+            .description = "clear render target",
+            .body = "color = clear_color;",
+            .output = PL_SHADER_SIG_COLOR,
+            .variables = &(struct pl_shader_var) {
+                .var = pl_var_vec4("clear_color"),
+                .data = color,
+                .dynamic = true,
+            },
+            .num_variables = 1,
+        });
+        if (ok) {
+            ok = pl_dispatch_finish(p->clear_dispatch, pl_dispatch_params(
+                .shader = &sh,
+                .target = tex,
+                .rect = scissor ? mp_rect2d_to_pl(*scissor) : (pl_rect2d){0},
+            ));
+        }
+        pl_dispatch_abort(p->clear_dispatch, &sh);
+        if (!ok)
+            MP_ERR(ra, "Could not clear render target.\n");
+        return;
+    }
+
     // TODO: implement scissor clearing by bltting a 1x1 tex instead
     pl_tex_clear(get_gpu(ra), dst->priv, color);
 }
