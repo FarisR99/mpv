@@ -81,12 +81,21 @@ struct mp_user_filter {
     bool in_eof;
 };
 
+static bool accepts_hw_frame(void *opaque, struct mp_image *img)
+{
+    struct chain *p = opaque;
+    return p->vo && p->vo->driver->encode &&
+           vo_control(p->vo, VOCTRL_QUERY_HW_FRAME, img) == VO_TRUE;
+}
+
 static void update_output_caps(struct chain *p)
 {
     if (p->type != MP_OUTPUT_CHAIN_VIDEO)
         return;
 
     mp_autoconvert_clear(p->convert);
+    p->convert->accepts_hw_frame = accepts_hw_frame;
+    p->convert->accepts_hw_frame_opaque = p;
 
     if (p->vo) {
         uint8_t allowed_output_formats[IMGFMT_END - IMGFMT_START] = {0};

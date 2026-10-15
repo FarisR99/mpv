@@ -21,6 +21,12 @@ struct mp_autoconvert {
     // format changes and continue filtering when ready.
     void (*on_audio_format_change)(void *opaque);
     void *on_audio_format_change_opaque;
+
+    // Let the consumer validate an existing hardware frame without requiring
+    // a VO upload device. Called only for an otherwise allowed hardware format
+    // with an unspecified surface format.
+    bool (*accepts_hw_frame)(void *opaque, struct mp_image *img);
+    void *accepts_hw_frame_opaque;
 };
 
 // (to free this, free the filter itself, mp_autoconvert.f)

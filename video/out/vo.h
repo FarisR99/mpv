@@ -79,6 +79,8 @@ enum mp_voctrl {
     VOCTRL_PREINIT,
     VOCTRL_UNINIT,
     VOCTRL_RECONFIG,
+    // Validate an existing hardware frame including its surface format.
+    VOCTRL_QUERY_HW_FRAME,             // struct mp_image* (borrowed)
 
     VOCTRL_UPDATE_WINDOW_TITLE,         // char*
     VOCTRL_UPDATE_PLAYBACK_STATE,       // struct voctrl_playback_state*

@@ -24,6 +24,7 @@
 #include <stdlib.h>
 
 #include <libplacebo/utils/libav.h>
+#include <libavutil/hwcontext.h>
 
 #include "common/common.h"
 #include "options/options.h"
@@ -250,6 +251,29 @@ static void flip_page(struct vo *vo)
 
 static int control(struct vo *vo, uint32_t request, void *data)
 {
+    if (request == VOCTRL_QUERY_HW_FRAME) {
+        struct priv *p = vo->priv;
+        struct mp_image *img = data;
+        if (p->shutdown || !img->hwctx || !query_format(vo, img->imgfmt) ||
+            !query_format(vo, img->params.hw_subfmt))
+            return VO_FALSE;
+
+        AVHWFramesContext *frames = (void *)img->hwctx->data;
+        if (frames->format != imgfmt2pixfmt(img->imgfmt) ||
+            frames->sw_format != imgfmt2pixfmt(img->params.hw_subfmt))
+            return VO_FALSE;
+
+        const AVCodec *codec = p->enc->encoder->codec;
+        for (int n = 0; ; n++) {
+            const AVCodecHWConfig *config = avcodec_get_hw_config(codec, n);
+            if (!config)
+                break;
+            if (config->pix_fmt == frames->format &&
+                (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_FRAMES_CTX))
+                return VO_TRUE;
+        }
+        return VO_FALSE;
+    }
     return VO_NOTIMPL;
 }
 

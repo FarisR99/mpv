@@ -150,10 +150,16 @@ static bool build_image_converter(struct mp_autoconvert *c, struct mp_log *log,
     for (int n = 0; n < p->num_imgfmts; n++) {
         bool samefmt = img->params.imgfmt == p->imgfmts[n];
         bool samesubffmt = img->params.hw_subfmt == p->subfmts[n];
+        if (samefmt && !samesubffmt && !p->subfmts[n] && img->hwctx &&
+            c->accepts_hw_frame)
+        {
+            samesubffmt = c->accepts_hw_frame(c->accepts_hw_frame_opaque, img);
+        }
         /*
          * In practice, `p->subfmts` is not usually populated today, in which
          * case we must actively probe formats below to establish if the VO can
-         * accept the subfmt being used by the hwdec.
+         * accept the subfmt being used by the hwdec, unless the consumer has
+         * already validated the frame above.
          */
         if (samefmt && samesubffmt) {
             if (p->imgparams_set) {
