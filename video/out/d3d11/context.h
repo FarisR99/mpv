@@ -29,6 +29,7 @@ struct priv {
     ID3D11Device *device;
     IDXGISwapChain *swapchain;
     struct pl_color_space swapchain_csp;
+    BOOL fullscreen_state;
 
     int64_t perf_freq;
     unsigned last_sync_refresh_count;

@@ -740,11 +740,11 @@ endif
 lua = dependency('', required: false)
 lua_opt = get_option('lua')
 if lua_opt != 'disabled'
-    lua_version = [['lua', ['>=5.1.0', '<5.3.0']], # generic lua.pc
+    lua_version = [['luajit', '>= 2.0.0'],
+                   ['lua', ['>=5.1.0', '<5.3.0']], # generic lua.pc
                    ['lua52', '>= 5.2.0'],
                    ['lua5.2', '>= 5.2.0'],
                    ['lua-5.2', '>= 5.2.0'],
-                   ['luajit', '>= 2.0.0'],
                    ['lua51', '>= 5.1.0'],
                    ['lua5.1', '>= 5.1.0'],
                    ['lua-5.1', '>= 5.1.0']]
@@ -1071,6 +1071,7 @@ features += {'d3d11': d3d11.allowed()}
 if features['d3d11']
     sources += files('video/out/d3d11/context.c',
                      'video/out/d3d11/ra_d3d11.c',
+                     'video/out/d3d11/libmpv_d3d11.c',
                      'video/filter/vf_gpu_d3d11.c')
 endif
 
@@ -1860,7 +1861,8 @@ if get_option('libmpv')
                  description: 'mpv media player client library')
 
     headers = ['include/mpv/client.h', 'include/mpv/render.h',
-               'include/mpv/render_gl.h', 'include/mpv/stream_cb.h']
+               'include/mpv/render_d3d11.h', 'include/mpv/render_gl.h',
+               'include/mpv/stream_cb.h']
     install_headers(headers, subdir: 'mpv')
 
     # Allow projects to build with libmpv by cloning into ./subprojects/mpv
