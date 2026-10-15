@@ -20,13 +20,22 @@
 #include "filters/filter.h"
 #include "filters/filter_internal.h"
 #include "filters/user_filters.h"
+#include "misc/io_utils.h"
+#include "misc/path_utils.h"
 #include "options/m_config.h"
 #include "options/m_option.h"
 #include "options/options.h"
+#include "options/path.h"
+#include "osdep/io.h"
+#include "stream/stream.h"
 #include "video/filter/vf_gpu.h"
 #include "video/img_format.h"
 #include "video/out/aspect.h"
 #include "video/out/gpu/video.h"
+#include "video/out/placebo/ra_pl.h"
+#include "video/out/placebo/utils.h"
+
+#include <libplacebo/cache.h>
 
 extern const struct offscreen_context offscreen_vk;
 extern const struct offscreen_context offscreen_egl;
@@ -102,11 +111,85 @@ struct priv {
     struct ra_tex *target;
     struct mp_pin *in_pin;
 
+    pl_cache shader_cache;
+    pl_log cache_log;
+    char *cache_path;
+    uint64_t cache_signature;
+
     struct mp_image_params img_params;
     uint64_t next_frame_id;
     bool restore_subs_in_filter;
     bool prev_subs_in_filter;
 };
+
+static void shader_cache_init(struct mp_filter *f)
+{
+    struct priv *p = f->priv;
+    pl_gpu gpu = ra_pl_get(p->ctx->ra);
+    if (!gpu)
+        return;
+
+    struct gl_video_opts *opts = mp_get_config_group(f, f->global, &gl_video_conf);
+    char *dir = NULL;
+    if (opts->shader_cache) {
+        dir = opts->shader_cache_dir && opts->shader_cache_dir[0]
+            ? mp_get_user_path(f, f->global, opts->shader_cache_dir)
+            : mp_find_user_file(f, f->global, "cache", "");
+    }
+    talloc_free(opts);
+    if (!dir || !dir[0]) {
+        talloc_free(dir);
+        return;
+    }
+
+    mp_mkdirp(dir);
+    p->cache_path = mp_path_join(p, dir, "vf_gpu_shader.cache");
+    talloc_free(dir);
+    // Own the log separately: the cache outlives the offscreen GPU context.
+    p->cache_log = mppl_log_create(p, f->log);
+    p->shader_cache = pl_cache_create(pl_cache_params(
+        .log = p->cache_log,
+        .max_total_size = 128 << 20,
+        .max_object_size = 128 << 20,
+    ));
+    struct stat st;
+    struct bstr data = {0};
+    if (stat(p->cache_path, &st) == 0)
+        data = stream_read_file(p->cache_path, NULL, f->global, 256 << 20);
+    if (data.len) {
+        int count = pl_cache_load(p->shader_cache, data.start, data.len);
+        if (count >= 0) {
+            MP_VERBOSE(f, "Loaded %d libplacebo shader cache objects from '%s'.\n",
+                       count, p->cache_path);
+        }
+    }
+    talloc_free(data.start);
+    p->cache_signature = pl_cache_signature(p->shader_cache);
+    pl_gpu_set_cache(gpu, p->shader_cache);
+}
+
+static void shader_cache_uninit(struct mp_filter *f)
+{
+    struct priv *p = f->priv;
+    if (!p->shader_cache)
+        return;
+
+    if (pl_cache_signature(p->shader_cache) != p->cache_signature) {
+        size_t size = pl_cache_save(p->shader_cache, NULL, 0);
+        uint8_t *data = talloc_size(NULL, size);
+        pl_cache_save(p->shader_cache, data, size);
+        if (mp_save_to_file(p->cache_path, data, size)) {
+            MP_VERBOSE(f, "Saved %d libplacebo shader cache objects to '%s'.\n",
+                       pl_cache_objects(p->shader_cache), p->cache_path);
+        } else {
+            MP_VERBOSE(f, "Could not save libplacebo shader cache to '%s'.\n",
+                       p->cache_path);
+        }
+        talloc_free(data);
+    }
+    pl_cache_destroy(&p->shader_cache);
+    pl_log_destroy(&p->cache_log);
+}
 
 static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *in)
 {
@@ -303,6 +386,8 @@ static void gpu_destroy(struct mp_filter *f)
     }
 
     talloc_free(priv->ctx);
+    // GPU destruction may add backend pipeline data to the cache.
+    shader_cache_uninit(f);
 
     if (priv->restore_subs_in_filter) {
         struct mp_stream_info *info = mp_filter_find_stream_info(f);
@@ -350,6 +435,7 @@ static struct mp_filter *gpu_create(struct mp_filter *parent, void *options)
     if (!offscreen_ctx_set_current(priv->ctx, true))
         goto error;
 
+    shader_cache_init(f);
     priv->renderer = gl_video_init(priv->ctx->ra, f->log, f->global);
     mp_assert(priv->renderer); // can't fail (strangely)
 

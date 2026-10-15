@@ -898,6 +898,12 @@ Available mpv-only filters are:
     supports off-screen rendering on the default display. (This is the case with
     Mesa.)
 
+    With Vulkan or native D3D11, ``--gpu-shader-cache`` and
+    ``--gpu-shader-cache-dir`` also control a persistent libplacebo shader cache.
+    It is loaded when the filter is created and saved on normal teardown as
+    ``vf_gpu_shader.cache`` in the cache directory. Cached objects are limited
+    to 128 MiB in total.
+
     Sub-options:
 
     ``api=<type>``
