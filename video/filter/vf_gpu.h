@@ -20,6 +20,8 @@
 #include "common/common.h"
 
 struct mpv_global;
+struct mp_image;
+struct ra_tex;
 
 struct offscreen_ctx {
     struct mp_log *log;
@@ -28,6 +30,11 @@ struct offscreen_ctx {
 
     bool (*set_context)(struct offscreen_ctx *ctx, bool enable);
     void (*debug_marker)(struct offscreen_ctx *ctx, const char *msg);
+
+    // Allocate a hardware frame and wrap its texture for rendering. The caller
+    // owns both references and must finish rendering before releasing target.
+    struct mp_image *(*get_hw_target)(struct offscreen_ctx *ctx, int w, int h,
+                                      struct ra_tex **target);
 };
 
 struct offscreen_context {

@@ -931,6 +931,22 @@ Available mpv-only filters are:
         Size of the output in pixels (default: 0). If not positive, this will
         use the size of the first filtered input frame.
 
+    ``hw-output=<yes|no>``
+        Output D3D11 hardware frames instead of downloading rendered pixels to
+        system memory (default: no). Requires ``api=d3d11`` and a build with
+        D3D hardware acceleration support. Other APIs reject this option when
+        enabled.
+
+        Shaders render directly into a pool of BGRA textures on the rendering
+        device. Rendering is completed before each frame is handed downstream;
+        each texture remains owned by the frame until its consumer releases it.
+
+        For encoding, use an encoder accepting D3D11 frames, such as
+        ``--ovc=hevc_nvenc``. The encoder uses the filter's D3D11 device. Avoid
+        adding software filters or forcing a software output pixel format if
+        the frames should stay on the GPU. Input frames are still uploaded to
+        the renderer as usual.
+
     .. warning::
 
         This is highly experimental. Performance is bad, and it will not work
@@ -944,10 +960,9 @@ Available mpv-only filters are:
 
     .. warning::
 
-        If you use this with encoding mode, keep in mind that encoding mode will
-        convert the RGB filter's output back to yuv420p in software, using the
-        configured software scaler. Using ``zimg`` might improve this, but in
-        any case it might go against your goals when using this filter.
+        Encoders requiring software YUV frames need a software conversion of
+        the filter's RGB output, using the configured software scaler. Encoders
+        accepting RGB or D3D11 hardware frames can avoid that conversion.
 
     .. warning::
 

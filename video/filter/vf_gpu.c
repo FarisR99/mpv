@@ -99,6 +99,7 @@ static bool offscreen_ctx_set_current(struct offscreen_ctx *ctx, bool enable)
 struct gpu_opts {
     int w, h;
     char *api;
+    bool hw_output;
 };
 
 struct priv {
@@ -250,7 +251,11 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         gl_video_resize(priv->renderer, &src, &dst, &osd);
     }
 
-    if (!priv->target) {
+    if (priv->opts->hw_output) {
+        res = priv->ctx->get_hw_target(priv->ctx, w, h, &priv->target);
+        if (!res)
+            goto done;
+    } else if (!priv->target) {
         struct ra_tex_params params = {
             .dimensions = 2,
             .downloadable = true,
@@ -275,6 +280,14 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
     gl_video_render_frame(priv->renderer, &frame, &(struct ra_fbo){priv->target},
                           flags);
 
+    if (priv->opts->hw_output) {
+        // Complete writes before another API (such as NVENC) reads the frame.
+        // The AVHWFramesContext retains the texture until the consumer is done.
+        pl_gpu_finish(ra_pl_get(ra));
+        ok = true;
+        goto done;
+    }
+
     res = mp_image_alloc(IMGFMT_RGB0, w, h);
     if (!res)
         goto done;
@@ -289,6 +302,8 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
 
     ok = true;
 done:
+    if (priv->opts->hw_output)
+        ra_tex_free(ra, &priv->target);
     if (priv->ctx->debug_marker)
         priv->ctx->debug_marker(priv->ctx, "after rendering");
     if (!ok)
@@ -427,7 +442,12 @@ static struct mp_filter *gpu_create(struct mp_filter *parent, void *options)
         goto error;
     }
 
-    if (!priv->ctx->ra->fns->tex_download) {
+    if (priv->opts->hw_output && !priv->ctx->get_hw_target) {
+        MP_FATAL(f, "Hardware output requires api=d3d11 and D3D hardware acceleration support.\n");
+        goto error;
+    }
+
+    if (!priv->opts->hw_output && !priv->ctx->ra->fns->tex_download) {
         MP_FATAL(f, "Offscreen ra context does not support image retrieval.\n");
         goto error;
     }
@@ -480,6 +500,7 @@ const struct mp_user_filter_entry vf_gpu = {
         .options = (const struct m_option[]){
             {"w", OPT_INT(w)},
             {"h", OPT_INT(h)},
+            {"hw-output", OPT_BOOL(hw_output)},
             {"api", OPT_STRING_VALIDATE(api, offscreen_ctx_validate_api),
                 .help = offscreen_ctx_api_help},
             {0}

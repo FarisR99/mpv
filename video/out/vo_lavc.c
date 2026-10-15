@@ -108,6 +108,11 @@ static int reconfig2(struct vo *vo, struct mp_image *img)
     encoder->width = width;
     encoder->height = height;
     encoder->pix_fmt = pix_fmt;
+    if (img->hwctx) {
+        // Hardware encoders need the frame pool (and its device) before opening.
+        encoder->hw_frames_ctx = av_buffer_ref(img->hwctx);
+        MP_HANDLE_OOM(encoder->hw_frames_ctx);
+    }
     encoder->colorspace = pl_system_to_av(params->repr.sys);
     encoder->color_range = pl_levels_to_av(params->repr.levels);
 
