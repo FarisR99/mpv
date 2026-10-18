@@ -200,6 +200,8 @@ static int reconfig2(struct vo *vo, struct mp_image *img)
     }
     encoder->colorspace = pl_system_to_av(params->repr.sys);
     encoder->color_range = pl_levels_to_av(params->repr.levels);
+    encoder->color_primaries = pl_primaries_to_av(params->color.primaries);
+    encoder->color_trc = pl_transfer_to_av(params->color.transfer);
     encoder->chroma_sample_location = pl_chroma_to_av(params->chroma_location);
 
     // NVENC converts packed RGB input to limited range BT.601 YUV and signals
