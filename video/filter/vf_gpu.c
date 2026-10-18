@@ -35,6 +35,7 @@
 #include "video/out/gpu/video.h"
 #include "video/out/placebo/ra_pl.h"
 #include "video/out/placebo/utils.h"
+#include "video/out/vo.h"
 
 #include <libplacebo/cache.h>
 
@@ -100,7 +101,7 @@ static bool offscreen_ctx_set_current(struct offscreen_ctx *ctx, bool enable)
 struct gpu_opts {
     int w, h;
     char *api;
-    bool hw_output;
+    int hw_output;
 };
 
 struct priv {
@@ -120,6 +121,7 @@ struct priv {
 
     struct mp_image_params img_params;
     uint64_t next_frame_id;
+    bool hw_output, hw_output_resolved;
     bool restore_subs_in_filter;
     bool prev_subs_in_filter;
 
@@ -204,6 +206,25 @@ static void shader_cache_uninit(struct mp_filter *f)
     pl_log_destroy(&p->cache_log);
 }
 
+// Enable hardware output if the encoder accepts the renderer's frames directly.
+static bool auto_hw_output(struct mp_filter *f, int w, int h)
+{
+    struct priv *priv = f->priv;
+    struct mp_stream_info *info = mp_filter_find_stream_info(f);
+    struct vo *vo = info ? info->dr_vo : NULL;
+    if (!priv->ctx->get_hw_target || !vo || !vo->driver->encode)
+        return false;
+
+    struct ra_tex *target = NULL;
+    struct mp_image *img = priv->ctx->get_hw_target(priv->ctx, w, h, &target);
+    bool ok = img && vo_control(vo, VOCTRL_QUERY_HW_FRAME, img) == VO_TRUE;
+    ra_tex_free(priv->ctx->ra, &target);
+    talloc_free(img);
+    if (!ok)
+        MP_VERBOSE(f, "Encoder does not accept hardware frames from the renderer.\n");
+    return ok;
+}
+
 static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *in)
 {
     struct priv *priv = f->priv;
@@ -263,7 +284,15 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         gl_video_resize(priv->renderer, &src, &dst, &osd);
     }
 
-    if (priv->opts->hw_output) {
+    if (!priv->hw_output_resolved) {
+        priv->hw_output = priv->opts->hw_output > 0 ||
+                          (priv->opts->hw_output < 0 && auto_hw_output(f, w, h));
+        priv->hw_output_resolved = true;
+        if (priv->hw_output)
+            MP_VERBOSE(f, "Rendering directly to hardware frames.\n");
+    }
+
+    if (priv->hw_output) {
         res = priv->ctx->get_hw_target(priv->ctx, w, h, &priv->target);
         if (!res)
             goto done;
@@ -293,7 +322,7 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
                           flags);
 
     int64_t sync_start = mp_time_ns();
-    if (priv->opts->hw_output) {
+    if (priv->hw_output) {
         // Submit the rendering without waiting for it. The consumer (such as
         // NVENC) uses the same D3D11 device, so its reads are ordered after
         // these writes. The AVHWFramesContext retains the texture until the
@@ -319,7 +348,7 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
 
     ok = true;
 done:
-    if (priv->opts->hw_output)
+    if (priv->hw_output)
         ra_tex_free(ra, &priv->target);
     if (priv->ctx->debug_marker)
         priv->ctx->debug_marker(priv->ctx, "after rendering");
@@ -417,7 +446,7 @@ static void gpu_destroy(struct mp_filter *f)
                    "%s avg %.3f ms max %.3f ms.\n", priv->num_frames,
                    MP_TIME_NS_TO_MS(priv->render_ns) / n,
                    MP_TIME_NS_TO_MS(priv->render_max_ns),
-                   priv->opts->hw_output ? "flush" : "download",
+                   priv->hw_output ? "flush" : "download",
                    MP_TIME_NS_TO_MS(priv->sync_ns) / n,
                    MP_TIME_NS_TO_MS(priv->sync_max_ns));
     }
@@ -473,12 +502,12 @@ static struct mp_filter *gpu_create(struct mp_filter *parent, void *options)
         goto error;
     }
 
-    if (priv->opts->hw_output && !priv->ctx->get_hw_target) {
+    if (priv->opts->hw_output > 0 && !priv->ctx->get_hw_target) {
         MP_FATAL(f, "Hardware output requires api=d3d11 and D3D hardware acceleration support.\n");
         goto error;
     }
 
-    if (!priv->opts->hw_output && !priv->ctx->ra->fns->tex_download) {
+    if (priv->opts->hw_output <= 0 && !priv->ctx->ra->fns->tex_download) {
         MP_FATAL(f, "Offscreen ra context does not support image retrieval.\n");
         goto error;
     }
@@ -528,10 +557,14 @@ const struct mp_user_filter_entry vf_gpu = {
         .description = "vo_gpu as filter",
         .name = "gpu",
         .priv_size = sizeof(OPT_BASE_STRUCT),
+        .priv_defaults = &(const OPT_BASE_STRUCT){
+            .hw_output = -1,
+        },
         .options = (const struct m_option[]){
             {"w", OPT_INT(w)},
             {"h", OPT_INT(h)},
-            {"hw-output", OPT_BOOL(hw_output)},
+            {"hw-output", OPT_CHOICE(hw_output,
+                {"auto", -1}, {"no", 0}, {"yes", 1})},
             {"api", OPT_STRING_VALIDATE(api, offscreen_ctx_validate_api),
                 .help = offscreen_ctx_api_help},
             {0}

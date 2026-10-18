@@ -931,14 +931,18 @@ Available mpv-only filters are:
         Size of the output in pixels (default: 0). If not positive, this will
         use the size of the first filtered input frame.
 
-    ``hw-output=<yes|no>``
+    ``hw-output=<auto|yes|no>``
         Output D3D11 hardware frames instead of downloading rendered pixels to
-        system memory (default: no). Requires ``api=d3d11`` and a build with
-        D3D hardware acceleration support. Other APIs reject this option when
-        enabled.
+        system memory. Requires ``api=d3d11`` and a build with D3D hardware
+        acceleration support. Other APIs reject ``yes``.
+
+        ``auto`` (default) enables this when encoding with an encoder that
+        accepts the renderer's D3D11 frames directly, such as
+        ``--ovc=hevc_nvenc``, and downloads frames otherwise. ``no`` always
+        downloads frames.
 
         Shaders render directly into a pool of BGRA textures on the rendering
-        device. Rendering is completed before each frame is handed downstream;
+        device. Rendering is submitted before each frame is handed downstream;
         each texture remains owned by the frame until its consumer releases it.
 
         For encoding, use an encoder accepting D3D11 frames, such as

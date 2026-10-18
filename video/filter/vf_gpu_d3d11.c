@@ -89,7 +89,6 @@ static bool init_hw_pool(struct offscreen_ctx *ctx, int w, int h)
         return false;
     }
 
-    mp_verbose(ctx->log, "Rendering directly to D3D11 hardware frames (BGRA).\n");
     return true;
 }
 

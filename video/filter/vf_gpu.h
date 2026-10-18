@@ -32,7 +32,7 @@ struct offscreen_ctx {
     void (*debug_marker)(struct offscreen_ctx *ctx, const char *msg);
 
     // Allocate a hardware frame and wrap its texture for rendering. The caller
-    // owns both references and must finish rendering before releasing target.
+    // owns both references and must submit rendering before releasing target.
     struct mp_image *(*get_hw_target)(struct offscreen_ctx *ctx, int w, int h,
                                       struct ra_tex **target);
 };
