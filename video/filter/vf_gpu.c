@@ -105,6 +105,7 @@ struct gpu_opts {
     char *api;
     int hw_output;
     int hw_format;
+    int sw_format;
 };
 
 // Number of software output frames that can be rendered and downloading at
@@ -112,7 +113,8 @@ struct gpu_opts {
 #define DOWNLOAD_DEPTH 3
 
 struct download_slot {
-    struct ra_tex *tex;
+    struct ra_tex *tex; // RGB output
+    pl_tex planes[MP_MAX_PLANES]; // NV12 output
     pl_buf buf;
     struct mp_image *img; // waiting for the download to finish, or NULL
 };
@@ -141,6 +143,7 @@ struct priv {
     // Asynchronous software output: a ring of render targets downloaded into
     // persistent buffers, read back only once the next frames are submitted.
     bool async_download;
+    int sw_format; // format of software output
     struct download_slot slots[DOWNLOAD_DEPTH];
     int first_pending, num_pending;
     struct mp_image_pool *pool;
@@ -286,6 +289,7 @@ static void destroy_slots(struct priv *priv)
     for (int n = 0; n < DOWNLOAD_DEPTH; n++) {
         struct download_slot *slot = &priv->slots[n];
         ra_tex_free(priv->ctx->ra, &slot->tex);
+        destroy_planes(ra_pl_get(priv->ctx->ra), slot->planes);
         pl_buf_destroy(ra_pl_get(priv->ctx->ra), &slot->buf);
     }
 }
@@ -297,17 +301,71 @@ static struct download_slot *next_slot(struct priv *priv)
     return &priv->slots[n];
 }
 
-// Start downloading the slot's texture into its buffer.
+// Create the slot's textures for the software output format.
+static bool init_slot(struct priv *priv, struct download_slot *slot, int w, int h)
+{
+    struct ra *ra = priv->ctx->ra;
+    pl_gpu gpu = ra_pl_get(ra);
+
+    if (priv->sw_format != IMGFMT_NV12) {
+        if (!slot->tex)
+            slot->tex = create_target(ra, w, h, false);
+        return slot->tex;
+    }
+
+    for (int n = 0; n < 2 && !slot->planes[n]; n++) {
+        pl_fmt fmt = pl_find_fmt(gpu, PL_FMT_UNORM, n + 1, 8, 8,
+                                 PL_FMT_CAP_RENDERABLE | PL_FMT_CAP_HOST_READABLE);
+        if (!fmt)
+            return false;
+        slot->planes[n] = pl_tex_create(gpu, pl_tex_params(
+            .w = w >> n,
+            .h = h >> n,
+            .format = fmt,
+            .renderable = true,
+            .host_readable = true,
+        ));
+        if (!slot->planes[n])
+            return false;
+    }
+    return true;
+}
+
+// Return the textures to download, and the offset of each in the buffer.
+static int slot_layout(struct download_slot *slot, pl_tex tex[MP_MAX_PLANES],
+                       size_t offset[MP_MAX_PLANES + 1])
+{
+    int num = 0;
+    if (slot->tex) {
+        tex[num++] = ra_pl_tex_get(slot->tex);
+    } else {
+        while (num < MP_MAX_PLANES && slot->planes[num]) {
+            tex[num] = slot->planes[num];
+            num++;
+        }
+    }
+
+    offset[0] = 0;
+    for (int n = 0; n < num; n++) {
+        size_t size = tex[n]->params.w * tex[n]->params.format->texel_size *
+                      tex[n]->params.h;
+        // Keep each plane suitably aligned for buffer copies.
+        offset[n + 1] = MP_ALIGN_UP(offset[n] + size, 4096);
+    }
+    return num;
+}
+
+// Start downloading the slot's textures into its buffer.
 static bool start_download(struct ra *ra, struct download_slot *slot)
 {
     pl_gpu gpu = ra_pl_get(ra);
-    pl_tex tex = ra_pl_tex_get(slot->tex);
-    size_t row_pitch = tex->params.w * tex->params.format->texel_size;
-    size_t size = row_pitch * tex->params.h;
+    pl_tex tex[MP_MAX_PLANES];
+    size_t offset[MP_MAX_PLANES + 1];
+    int num = slot_layout(slot, tex, offset);
 
     if (!slot->buf) {
         slot->buf = pl_buf_create(gpu, pl_buf_params(
-            .size = size,
+            .size = offset[num],
             .memory_type = PL_BUF_MEM_HOST,
             .host_readable = true,
         ));
@@ -315,12 +373,15 @@ static bool start_download(struct ra *ra, struct download_slot *slot)
             return false;
     }
 
-    if (!pl_tex_download(gpu, pl_tex_transfer_params(
-            .tex = tex,
-            .buf = slot->buf,
-            .row_pitch = row_pitch,
-        )))
-        return false;
+    for (int n = 0; n < num; n++) {
+        if (!pl_tex_download(gpu, pl_tex_transfer_params(
+                .tex = tex[n],
+                .buf = slot->buf,
+                .buf_offset = offset[n],
+                .row_pitch = tex[n]->params.w * tex[n]->params.format->texel_size,
+            )))
+            return false;
+    }
 
     // Start the rendering and download without waiting for them.
     pl_gpu_flush(gpu);
@@ -332,20 +393,57 @@ static bool finish_download(struct ra *ra, struct download_slot *slot)
 {
     pl_gpu gpu = ra_pl_get(ra);
     struct mp_image *img = slot->img;
-    size_t row_pitch = slot->tex->params.w * slot->tex->params.format->pixel_size;
+    pl_tex tex[MP_MAX_PLANES];
+    size_t offset[MP_MAX_PLANES + 1];
+    int num = slot_layout(slot, tex, offset);
 
     while (pl_buf_poll(gpu, slot->buf, UINT64_MAX))
         ;
 
-    if ((size_t)img->stride[0] == row_pitch)
-        return pl_buf_read(gpu, slot->buf, 0, img->planes[0], row_pitch * img->h);
-
-    for (int y = 0; y < img->h; y++) {
-        if (!pl_buf_read(gpu, slot->buf, y * row_pitch,
-                         img->planes[0] + y * img->stride[0], row_pitch))
-            return false;
+    for (int n = 0; n < num; n++) {
+        size_t row_pitch = tex[n]->params.w * tex[n]->params.format->texel_size;
+        int rows = tex[n]->params.h;
+        if ((size_t)img->stride[n] == row_pitch) {
+            if (!pl_buf_read(gpu, slot->buf, offset[n], img->planes[n],
+                             row_pitch * rows))
+                return false;
+            continue;
+        }
+        for (int y = 0; y < rows; y++) {
+            if (!pl_buf_read(gpu, slot->buf, offset[n] + y * row_pitch,
+                             img->planes[n] + y * img->stride[n], row_pitch))
+                return false;
+        }
     }
     return true;
+}
+
+// Return the software output format: NV12 if the GPU converts the output,
+// otherwise RGB0. In auto mode, NV12 is used when encoding with an encoder
+// that accepts it.
+static int choose_sw_format(struct mp_filter *f, int w, int h)
+{
+    struct priv *priv = f->priv;
+    int fmt = priv->opts->sw_format;
+    if (fmt == IMGFMT_RGB0)
+        return fmt;
+
+    if (!priv->async_download || w % 2 || h % 2) {
+        if (fmt)
+            MP_WARN(f, "NV12 output requires buffer downloads (such as with "
+                    "api=vulkan) and an even size; using RGB.\n");
+        return IMGFMT_RGB0;
+    }
+    if (fmt)
+        return fmt;
+
+    struct mp_stream_info *info = mp_filter_find_stream_info(f);
+    struct vo *vo = info ? info->dr_vo : NULL;
+    if (!vo || !vo->driver->encode)
+        return IMGFMT_RGB0;
+    uint8_t formats[IMGFMT_END - IMGFMT_START];
+    vo_query_formats(vo, formats);
+    return formats[IMGFMT_NV12 - IMGFMT_START] ? IMGFMT_NV12 : IMGFMT_RGB0;
 }
 
 // Return the hardware output surface format: the first candidate an encoder
@@ -514,11 +612,15 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         if (priv->hw_format) {
             MP_VERBOSE(f, "Rendering directly to %s hardware frames.\n",
                        mp_imgfmt_to_name(priv->hw_format));
-        } else if (can_download_async(ra)) {
-            priv->async_download = true;
-            MP_VERBOSE(f, "Downloading frames asynchronously.\n");
+        } else {
+            priv->async_download = can_download_async(ra);
+            priv->sw_format = choose_sw_format(f, w, h);
+            MP_VERBOSE(f, "Downloading %s frames%s.\n",
+                       mp_imgfmt_to_name(priv->sw_format),
+                       priv->async_download ? " asynchronously" : "");
         }
     }
+    bool yuv = priv->hw_format == IMGFMT_NV12 || priv->sw_format == IMGFMT_NV12;
 
     pl_tex planes[MP_MAX_PLANES] = {0};
     struct ra_tex hw_target;
@@ -535,27 +637,30 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         if (!mppl_wrap_tex(ra, planes[0], &hw_target))
             goto done;
         fbo = &hw_target;
-    } else if (priv->async_download) {
-        // Render each frame in flight to its own target, so that rendering
-        // the next frame doesn't wait for the previous download.
-        slot = next_slot(priv);
-        if (!slot->tex)
-            slot->tex = create_target(ra, w, h, false);
-        if (!slot->tex)
-            goto done;
-        fbo = slot->tex;
-    } else if (!priv->target) {
-        priv->target = create_target(ra, w, h, priv->hw_format);
-        if (!priv->target)
-            goto done;
-        fbo = priv->target;
+    } else {
+        // Each frame in flight has its own textures to download from, so that
+        // rendering the next frame doesn't wait for the previous download.
+        // NV12 is converted from the shared target.
+        if (priv->async_download) {
+            slot = next_slot(priv);
+            if (!init_slot(priv, slot, w, h))
+                goto done;
+        }
+        if (slot && slot->tex) {
+            fbo = slot->tex;
+        } else if (!priv->target) {
+            priv->target = create_target(ra, w, h, yuv);
+            if (!priv->target)
+                goto done;
+            fbo = priv->target;
+        }
     }
 
     // (it doesn't have access to the OSD though)
     int flags = RENDER_FRAME_SUBS | RENDER_FRAME_VF_SUBS;
     gl_video_render_frame(priv->renderer, &frame, &(struct ra_fbo){fbo}, flags);
 
-    if (priv->hw_format == IMGFMT_NV12 && !render_yuv(f, planes))
+    if (yuv && !render_yuv(f, slot ? slot->planes : planes))
         goto done;
 
     int64_t sync_start = mp_time_ns();
@@ -576,7 +681,7 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
             goto done;
         if (!priv->pool)
             priv->pool = mp_image_pool_new(priv);
-        res = mp_image_pool_get(priv->pool, IMGFMT_RGB0, w, h);
+        res = mp_image_pool_get(priv->pool, priv->sw_format, w, h);
         ok = !!res;
         goto done;
     }
@@ -686,7 +791,7 @@ static void gpu_process(struct mp_filter *f)
     const struct mp_image_params *target =
         gl_video_get_target_params_ptr(priv->renderer);
     res->params.color = target->color;
-    if (priv->hw_format == IMGFMT_NV12) {
+    if (priv->hw_format == IMGFMT_NV12 || priv->sw_format == IMGFMT_NV12) {
         res->params.repr = priv->yuv_repr;
         res->params.chroma_location = PL_CHROMA_LEFT;
     } else {
@@ -869,6 +974,8 @@ const struct mp_user_filter_entry vf_gpu = {
                 {"auto", -1}, {"no", 0}, {"yes", 1})},
             {"hw-format", OPT_CHOICE(hw_format,
                 {"auto", 0}, {"nv12", IMGFMT_NV12}, {"bgra", IMGFMT_BGRA})},
+            {"sw-format", OPT_CHOICE(sw_format,
+                {"auto", 0}, {"nv12", IMGFMT_NV12}, {"rgb", IMGFMT_RGB0})},
             {"api", OPT_STRING_VALIDATE(api, offscreen_ctx_validate_api),
                 .help = offscreen_ctx_api_help},
             {0}

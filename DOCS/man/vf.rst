@@ -963,6 +963,19 @@ Available mpv-only filters are:
         outputs the rendered RGB. ``auto`` uses the first of ``nv12`` and
         ``bgra`` the encoder accepts.
 
+    ``sw-format=<auto|nv12|rgb>``
+        Format of frames downloaded to system memory (default: auto).
+
+        ``nv12`` converts the rendered RGB to 4:2:0 YUV on the GPU as with
+        ``hw-format=nv12``, which reduces the amount of data downloaded and
+        avoids converting it in software. This requires an API that can
+        download into buffers, such as ``api=vulkan``, and an even output size;
+        otherwise RGB is used. ``rgb`` outputs the rendered RGB. ``auto`` uses
+        ``nv12`` when encoding with an encoder that accepts it, such as
+        ``--ovc=hevc_nvenc``, and ``rgb`` otherwise. Encoders that only accept
+        planar YUV, such as ``libx265``, can use ``nv12`` to convert in
+        software from YUV rather than RGB.
+
     .. warning::
 
         This is highly experimental. Performance is bad, and it will not work
