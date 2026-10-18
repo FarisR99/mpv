@@ -27,6 +27,7 @@
 #include "options/options.h"
 #include "options/path.h"
 #include "osdep/io.h"
+#include "osdep/timer.h"
 #include "stream/stream.h"
 #include "video/filter/vf_gpu.h"
 #include "video/img_format.h"
@@ -121,7 +122,18 @@ struct priv {
     uint64_t next_frame_id;
     bool restore_subs_in_filter;
     bool prev_subs_in_filter;
+
+    // Per-frame timing, logged on destruction for benchmarking.
+    int64_t num_frames;
+    int64_t render_ns, render_max_ns;
+    int64_t sync_ns, sync_max_ns;
 };
+
+static void add_time(int64_t *total, int64_t *max, int64_t ns)
+{
+    *total += ns;
+    *max = MPMAX(*max, ns);
+}
 
 static void shader_cache_init(struct mp_filter *f)
 {
@@ -280,10 +292,14 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
     gl_video_render_frame(priv->renderer, &frame, &(struct ra_fbo){priv->target},
                           flags);
 
+    int64_t sync_start = mp_time_ns();
     if (priv->opts->hw_output) {
-        // Complete writes before another API (such as NVENC) reads the frame.
-        // The AVHWFramesContext retains the texture until the consumer is done.
-        pl_gpu_finish(ra_pl_get(ra));
+        // Submit the rendering without waiting for it. The consumer (such as
+        // NVENC) uses the same D3D11 device, so its reads are ordered after
+        // these writes. The AVHWFramesContext retains the texture until the
+        // consumer is done.
+        pl_gpu_flush(ra_pl_get(ra));
+        add_time(&priv->sync_ns, &priv->sync_max_ns, mp_time_ns() - sync_start);
         ok = true;
         goto done;
     }
@@ -299,6 +315,7 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
     };
     if (!ra->fns->tex_download(ra, &download_params))
         goto done;
+    add_time(&priv->sync_ns, &priv->sync_max_ns, mp_time_ns() - sync_start);
 
     ok = true;
 done:
@@ -334,11 +351,14 @@ static void gpu_process(struct mp_filter *f)
     context_current = true;
 
     struct mp_image *mpi = frame.data;
+    int64_t render_start = mp_time_ns();
     struct mp_image *res = gpu_render_frame(f, mpi);
     if (!res) {
         MP_ERR(f, "Could not render or retrieve frame.\n");
         goto error;
     }
+    add_time(&priv->render_ns, &priv->render_max_ns, mp_time_ns() - render_start);
+    priv->num_frames++;
 
     // Preserve frame timing, but describe the rendered pixels rather than the
     // source color space, crop, orientation, or pixel aspect ratio.
@@ -390,6 +410,17 @@ static void gpu_reset(struct mp_filter *f)
 static void gpu_destroy(struct mp_filter *f)
 {
     struct priv *priv = f->priv;
+
+    if (priv->num_frames) {
+        double n = priv->num_frames;
+        MP_VERBOSE(f, "Timing: %"PRId64" frames, render avg %.3f ms max %.3f ms, "
+                   "%s avg %.3f ms max %.3f ms.\n", priv->num_frames,
+                   MP_TIME_NS_TO_MS(priv->render_ns) / n,
+                   MP_TIME_NS_TO_MS(priv->render_max_ns),
+                   priv->opts->hw_output ? "flush" : "download",
+                   MP_TIME_NS_TO_MS(priv->sync_ns) / n,
+                   MP_TIME_NS_TO_MS(priv->sync_max_ns));
+    }
 
     if (priv->ctx) {
         offscreen_ctx_set_current(priv->ctx, true);

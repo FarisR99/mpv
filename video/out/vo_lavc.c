@@ -35,6 +35,7 @@
 #include "vo.h"
 
 #include "common/encode_lavc.h"
+#include "osdep/timer.h"
 
 #include "sub/osd.h"
 
@@ -42,6 +43,10 @@ struct priv {
     struct encoder_context *enc;
 
     bool shutdown;
+
+    // Per-frame timing, logged on uninit for benchmarking.
+    int64_t num_frames;
+    int64_t encode_ns, encode_max_ns;
 };
 
 static int preinit(struct vo *vo)
@@ -61,6 +66,13 @@ static void uninit(struct vo *vo)
 
     if (!vc->shutdown)
         mp_encoder_encode(enc, NULL); // finish encoding
+
+    if (vc->num_frames) {
+        MP_VERBOSE(vo, "Timing: %"PRId64" frames, encode avg %.3f ms max %.3f ms.\n",
+                   vc->num_frames,
+                   MP_TIME_NS_TO_MS(vc->encode_ns) / (double)vc->num_frames,
+                   MP_TIME_NS_TO_MS(vc->encode_max_ns));
+    }
 }
 
 static int reconfig2(struct vo *vo, struct mp_image *img)
@@ -238,7 +250,12 @@ static bool draw_frame(struct vo *vo, struct vo_frame *voframe)
     frame->pts = rint(outpts * av_q2d(av_inv_q(avc->time_base)));
     frame->pict_type = 0; // keep this at unknown/undefined
     frame->quality = avc->global_quality;
+    int64_t encode_start = mp_time_ns();
     mp_encoder_encode(enc, frame);
+    int64_t encode_time = mp_time_ns() - encode_start;
+    vc->encode_ns += encode_time;
+    vc->encode_max_ns = MPMAX(vc->encode_max_ns, encode_time);
+    vc->num_frames++;
     av_frame_free(&frame);
 
 done:
