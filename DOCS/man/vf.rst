@@ -941,18 +941,27 @@ Available mpv-only filters are:
         ``--ovc=hevc_nvenc``, and downloads frames otherwise. ``no`` always
         downloads frames.
 
-        Shaders render directly into a pool of BGRA textures on the rendering
-        device. Rendering is submitted before each frame is handed downstream;
-        each texture remains owned by the frame until its consumer releases it.
+        Frames are rendered into a pool of textures on the rendering device
+        (see ``hw-format``). Rendering is submitted before each frame is handed
+        downstream; each texture remains owned by the frame until its consumer
+        releases it.
 
         For encoding, use an encoder accepting D3D11 frames, such as
         ``--ovc=hevc_nvenc``. Frames are mapped without copying for QSV
-        encoders accepting BGRA input, such as ``--ovc=hevc_qsv``; this requires
-        rendering on the Intel GPU (see ``--d3d11-adapter``). The encoder uses
-        the filter's D3D11 device. Avoid
-        adding software filters or forcing a software output pixel format if
-        the frames should stay on the GPU. Input frames are still uploaded to
-        the renderer as usual.
+        encoders, such as ``--ovc=hevc_qsv``; this requires rendering on the
+        Intel GPU (see ``--d3d11-adapter``). The encoder uses the filter's D3D11
+        device. Avoid adding software filters or forcing a software output
+        pixel format if the frames should stay on the GPU. Input frames are
+        still uploaded to the renderer as usual.
+
+    ``hw-format=<auto|nv12|bgra>``
+        Surface format of hardware output frames (default: auto).
+
+        ``nv12`` converts the rendered RGB to limited range 4:2:0 YUV on the
+        GPU, using the BT.709 matrix (BT.2020 for BT.2020 primaries) and
+        left-sited chroma, so encoders do not convert it themselves. ``bgra``
+        outputs the rendered RGB. ``auto`` uses the first of ``nv12`` and
+        ``bgra`` the encoder accepts.
 
     .. warning::
 

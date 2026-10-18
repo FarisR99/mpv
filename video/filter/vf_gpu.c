@@ -38,6 +38,7 @@
 #include "video/out/vo.h"
 
 #include <libplacebo/cache.h>
+#include <libplacebo/renderer.h>
 
 extern const struct offscreen_context offscreen_vk;
 extern const struct offscreen_context offscreen_egl;
@@ -102,6 +103,7 @@ struct gpu_opts {
     int w, h;
     char *api;
     int hw_output;
+    int hw_format;
 };
 
 struct priv {
@@ -111,6 +113,7 @@ struct priv {
 
     struct offscreen_ctx *ctx;
     struct gl_video *renderer;
+    // Rendered to for software output and as the source of YUV conversion.
     struct ra_tex *target;
     struct mp_pin *in_pin;
 
@@ -121,7 +124,13 @@ struct priv {
 
     struct mp_image_params img_params;
     uint64_t next_frame_id;
-    bool hw_output, hw_output_resolved;
+    int hw_format; // surface format of hardware output, 0 for software output
+    bool hw_output_resolved;
+
+    // Converts RGB to YUV hardware output.
+    pl_log yuv_log;
+    pl_renderer yuv_renderer;
+    struct pl_color_repr yuv_repr;
     bool restore_subs_in_filter;
     bool prev_subs_in_filter;
 
@@ -206,23 +215,111 @@ static void shader_cache_uninit(struct mp_filter *f)
     pl_log_destroy(&p->cache_log);
 }
 
-// Enable hardware output if the encoder accepts the renderer's frames directly.
-static bool auto_hw_output(struct mp_filter *f, int w, int h)
+static void destroy_planes(pl_gpu gpu, pl_tex planes[MP_MAX_PLANES])
+{
+    for (int n = 0; n < MP_MAX_PLANES; n++)
+        pl_tex_destroy(gpu, &planes[n]);
+}
+
+// Return the hardware output surface format: the first candidate an encoder
+// accepts directly, or for hw-output=yes, the first one that can be allocated.
+// Return 0 for software output.
+static int choose_hw_format(struct mp_filter *f, int w, int h)
 {
     struct priv *priv = f->priv;
+    if (!priv->opts->hw_output || !priv->ctx->get_hw_frame)
+        return 0;
+
+    int candidates[] = {IMGFMT_NV12, IMGFMT_BGRA};
+    int num_candidates = MP_ARRAY_SIZE(candidates);
+    if (priv->opts->hw_format) {
+        candidates[0] = priv->opts->hw_format;
+        num_candidates = 1;
+    }
+
     struct mp_stream_info *info = mp_filter_find_stream_info(f);
     struct vo *vo = info ? info->dr_vo : NULL;
-    if (!priv->ctx->get_hw_target || !vo || !vo->driver->encode)
-        return false;
+    bool encoding = vo && vo->driver->encode;
+    pl_gpu gpu = ra_pl_get(priv->ctx->ra);
+    int fallback = 0;
+    for (int n = 0; n < num_candidates; n++) {
+        pl_tex planes[MP_MAX_PLANES];
+        struct mp_image *img =
+            priv->ctx->get_hw_frame(priv->ctx, candidates[n], w, h, planes);
+        if (!img)
+            continue;
+        bool ok = encoding && vo_control(vo, VOCTRL_QUERY_HW_FRAME, img) == VO_TRUE;
+        destroy_planes(gpu, planes);
+        talloc_free(img);
+        if (ok)
+            return candidates[n];
+        if (!fallback)
+            fallback = candidates[n];
+    }
 
-    struct ra_tex *target = NULL;
-    struct mp_image *img = priv->ctx->get_hw_target(priv->ctx, w, h, &target);
-    bool ok = img && vo_control(vo, VOCTRL_QUERY_HW_FRAME, img) == VO_TRUE;
-    ra_tex_free(priv->ctx->ra, &target);
-    talloc_free(img);
-    if (!ok)
-        MP_VERBOSE(f, "Encoder does not accept hardware frames from the renderer.\n");
-    return ok;
+    if (priv->opts->hw_output > 0) {
+        if (!fallback)
+            MP_WARN(f, "Could not allocate hardware frames; using software output.\n");
+        return fallback;
+    }
+    MP_VERBOSE(f, "Encoder does not accept hardware frames from the renderer.\n");
+    return 0;
+}
+
+// Convert the rendered RGB target to limited range YUV in the output planes.
+static bool render_yuv(struct mp_filter *f, pl_tex planes[MP_MAX_PLANES])
+{
+    struct priv *priv = f->priv;
+    pl_gpu gpu = ra_pl_get(priv->ctx->ra);
+    if (!priv->yuv_renderer) {
+        priv->yuv_log = mppl_log_create(priv, f->log);
+        priv->yuv_renderer = pl_renderer_create(priv->yuv_log, gpu);
+        if (!priv->yuv_renderer)
+            return false;
+    }
+
+    const struct mp_image_params *params =
+        gl_video_get_target_params_ptr(priv->renderer);
+    struct pl_frame src = {
+        .num_planes = 1,
+        .planes = {{
+            .texture = ra_pl_tex_get(priv->target),
+            .components = 3,
+            .component_mapping = {PL_CHANNEL_R, PL_CHANNEL_G, PL_CHANNEL_B},
+        }},
+        .repr = pl_color_repr_rgb,
+        .color = params->color,
+    };
+
+    priv->yuv_repr = (struct pl_color_repr) {
+        .sys = params->color.primaries == PL_COLOR_PRIM_BT_2020
+            ? PL_COLOR_SYSTEM_BT_2020_NC : PL_COLOR_SYSTEM_BT_709,
+        .levels = PL_COLOR_LEVELS_LIMITED,
+        .bits = {.sample_depth = 8, .color_depth = 8},
+    };
+    struct pl_frame dst = {
+        .num_planes = 2,
+        .planes = {
+            {
+                .texture = planes[0],
+                .components = 1,
+                .component_mapping = {PL_CHANNEL_Y},
+            },
+            {
+                .texture = planes[1],
+                .components = 2,
+                .component_mapping = {PL_CHANNEL_CB, PL_CHANNEL_CR},
+            },
+        },
+        .repr = priv->yuv_repr,
+        .color = params->color,
+    };
+    pl_frame_set_chroma_location(&dst, PL_CHROMA_LEFT);
+
+    return pl_render_image(priv->yuv_renderer, &src, &dst, pl_render_params(
+        .plane_downscaler = &pl_filter_hermite,
+        .dither_params = &pl_dither_default_params,
+    ));
 }
 
 static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *in)
@@ -285,28 +382,48 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
     }
 
     if (!priv->hw_output_resolved) {
-        priv->hw_output = priv->opts->hw_output > 0 ||
-                          (priv->opts->hw_output < 0 && auto_hw_output(f, w, h));
+        priv->hw_format = choose_hw_format(f, w, h);
         priv->hw_output_resolved = true;
-        if (priv->hw_output)
-            MP_VERBOSE(f, "Rendering directly to hardware frames.\n");
+        if (priv->hw_format) {
+            MP_VERBOSE(f, "Rendering directly to %s hardware frames.\n",
+                       mp_imgfmt_to_name(priv->hw_format));
+        }
     }
 
-    if (priv->hw_output) {
-        res = priv->ctx->get_hw_target(priv->ctx, w, h, &priv->target);
+    pl_tex planes[MP_MAX_PLANES] = {0};
+    struct ra_tex hw_target;
+    struct ra_tex *fbo = priv->target;
+    if (priv->hw_format) {
+        res = priv->ctx->get_hw_frame(priv->ctx, priv->hw_format, w, h, planes);
         if (!res)
             goto done;
+    }
+
+    if (priv->hw_format == IMGFMT_BGRA) {
+        // Render directly into the hardware frame.
+        if (!mppl_wrap_tex(ra, planes[0], &hw_target))
+            goto done;
+        fbo = &hw_target;
     } else if (!priv->target) {
+        // YUV conversion samples the target; use 16 bits to avoid rounding
+        // before the conversion.
+        bool yuv = priv->hw_format;
         struct ra_tex_params params = {
             .dimensions = 2,
-            .downloadable = true,
+            .downloadable = !yuv,
             .w = w,
             .h = h,
             .d = 1,
             .render_dst = true,
+            .render_src = yuv,
+            .src_linear = yuv,
         };
 
-        params.format = ra_find_unorm_format(ra, 1, 4);
+        if (yuv)
+            params.format = ra_find_unorm_format(ra, 2, 4);
+        if (!params.format || !params.format->renderable ||
+            !params.format->linear_filter)
+            params.format = ra_find_unorm_format(ra, 1, 4);
 
         if (!params.format || !params.format->renderable)
             goto done;
@@ -314,15 +431,18 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         priv->target = ra_tex_create(ra, &params);
         if (!priv->target)
             goto done;
+        fbo = priv->target;
     }
 
     // (it doesn't have access to the OSD though)
     int flags = RENDER_FRAME_SUBS | RENDER_FRAME_VF_SUBS;
-    gl_video_render_frame(priv->renderer, &frame, &(struct ra_fbo){priv->target},
-                          flags);
+    gl_video_render_frame(priv->renderer, &frame, &(struct ra_fbo){fbo}, flags);
+
+    if (priv->hw_format == IMGFMT_NV12 && !render_yuv(f, planes))
+        goto done;
 
     int64_t sync_start = mp_time_ns();
-    if (priv->hw_output) {
+    if (priv->hw_format) {
         // Submit the rendering without waiting for it. The consumer (such as
         // NVENC) uses the same D3D11 device, so its reads are ordered after
         // these writes. The AVHWFramesContext retains the texture until the
@@ -348,8 +468,7 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
 
     ok = true;
 done:
-    if (priv->hw_output)
-        ra_tex_free(ra, &priv->target);
+    destroy_planes(ra_pl_get(ra), planes);
     if (priv->ctx->debug_marker)
         priv->ctx->debug_marker(priv->ctx, "after rendering");
     if (!ok)
@@ -401,8 +520,13 @@ static void gpu_process(struct mp_filter *f)
     const struct mp_image_params *target =
         gl_video_get_target_params_ptr(priv->renderer);
     res->params.color = target->color;
-    res->params.repr.sys = target->repr.sys;
-    res->params.repr.levels = target->repr.levels;
+    if (priv->hw_format == IMGFMT_NV12) {
+        res->params.repr = priv->yuv_repr;
+        res->params.chroma_location = PL_CHROMA_LEFT;
+    } else {
+        res->params.repr.sys = target->repr.sys;
+        res->params.repr.levels = target->repr.levels;
+    }
     res->params.light = target->light;
 
     if (!offscreen_ctx_set_current(priv->ctx, false)) {
@@ -446,7 +570,7 @@ static void gpu_destroy(struct mp_filter *f)
                    "%s avg %.3f ms max %.3f ms.\n", priv->num_frames,
                    MP_TIME_NS_TO_MS(priv->render_ns) / n,
                    MP_TIME_NS_TO_MS(priv->render_max_ns),
-                   priv->hw_output ? "flush" : "download",
+                   priv->hw_format ? "flush" : "download",
                    MP_TIME_NS_TO_MS(priv->sync_ns) / n,
                    MP_TIME_NS_TO_MS(priv->sync_max_ns));
     }
@@ -454,6 +578,7 @@ static void gpu_destroy(struct mp_filter *f)
     if (priv->ctx) {
         offscreen_ctx_set_current(priv->ctx, true);
 
+        pl_renderer_destroy(&priv->yuv_renderer);
         gl_video_uninit(priv->renderer);
         ra_tex_free(priv->ctx->ra, &priv->target);
 
@@ -461,6 +586,7 @@ static void gpu_destroy(struct mp_filter *f)
     }
 
     talloc_free(priv->ctx);
+    pl_log_destroy(&priv->yuv_log);
     // GPU destruction may add backend pipeline data to the cache.
     shader_cache_uninit(f);
 
@@ -502,7 +628,7 @@ static struct mp_filter *gpu_create(struct mp_filter *parent, void *options)
         goto error;
     }
 
-    if (priv->opts->hw_output > 0 && !priv->ctx->get_hw_target) {
+    if (priv->opts->hw_output > 0 && !priv->ctx->get_hw_frame) {
         MP_FATAL(f, "Hardware output requires api=d3d11 and D3D hardware acceleration support.\n");
         goto error;
     }
@@ -565,6 +691,8 @@ const struct mp_user_filter_entry vf_gpu = {
             {"h", OPT_INT(h)},
             {"hw-output", OPT_CHOICE(hw_output,
                 {"auto", -1}, {"no", 0}, {"yes", 1})},
+            {"hw-format", OPT_CHOICE(hw_format,
+                {"auto", 0}, {"nv12", IMGFMT_NV12}, {"bgra", IMGFMT_BGRA})},
             {"api", OPT_STRING_VALIDATE(api, offscreen_ctx_validate_api),
                 .help = offscreen_ctx_api_help},
             {0}

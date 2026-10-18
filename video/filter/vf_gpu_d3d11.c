@@ -47,12 +47,14 @@ struct d3d11_offscreen_ctx
 extern const struct m_sub_options d3d11_conf;
 
 #if HAVE_D3D_HWACCEL
-static bool init_hw_pool(struct offscreen_ctx *ctx, int w, int h)
+static bool init_hw_pool(struct offscreen_ctx *ctx, enum AVPixelFormat sw_format,
+                         int w, int h)
 {
     struct d3d11_offscreen_ctx *p = ctx->priv;
     if (p->hw_pool) {
         AVHWFramesContext *frames = (void *)p->hw_pool->data;
-        if (frames->width == w && frames->height == h)
+        if (frames->sw_format == sw_format && frames->width == w &&
+            frames->height == h)
             return true;
         av_buffer_unref(&p->hw_pool);
     }
@@ -77,7 +79,7 @@ static bool init_hw_pool(struct offscreen_ctx *ctx, int w, int h)
 
     AVHWFramesContext *frames = (void *)p->hw_pool->data;
     frames->format = AV_PIX_FMT_D3D11;
-    frames->sw_format = AV_PIX_FMT_BGRA;
+    frames->sw_format = sw_format;
     frames->width = w;
     frames->height = h;
     // A dynamic pool gives each in-flight encoder frame a separate texture.
@@ -92,16 +94,39 @@ static bool init_hw_pool(struct offscreen_ctx *ctx, int w, int h)
     return true;
 }
 
-static struct mp_image *get_hw_target(struct offscreen_ctx *ctx, int w, int h,
-                                     struct ra_tex **target)
+static struct mp_image *get_hw_frame(struct offscreen_ctx *ctx, int imgfmt,
+                                    int w, int h, pl_tex planes[MP_MAX_PLANES])
 {
     struct d3d11_offscreen_ctx *p = ctx->priv;
     pl_gpu gpu = p->d3d11->gpu;
     struct mp_image *img = NULL;
     AVFrame *frame = NULL;
-    pl_tex tex = NULL;
+    for (int n = 0; n < MP_MAX_PLANES; n++)
+        planes[n] = NULL;
 
-    if (!init_hw_pool(ctx, w, h))
+    // Shader views of each plane; DXGI_FORMAT_UNKNOWN uses the texture format.
+    struct { DXGI_FORMAT fmt; int shift; } views[2] = {0};
+    int num_planes;
+    enum AVPixelFormat sw_format;
+    switch (imgfmt) {
+    case IMGFMT_BGRA:
+        sw_format = AV_PIX_FMT_BGRA;
+        num_planes = 1;
+        break;
+    case IMGFMT_NV12:
+        if ((w | h) & 1)
+            return NULL;
+        sw_format = AV_PIX_FMT_NV12;
+        num_planes = 2;
+        views[0].fmt = DXGI_FORMAT_R8_UNORM;
+        views[1].fmt = DXGI_FORMAT_R8G8_UNORM;
+        views[1].shift = 1;
+        break;
+    default:
+        return NULL;
+    }
+
+    if (!init_hw_pool(ctx, sw_format, w, h))
         goto error;
     frame = av_frame_alloc();
     if (!frame || av_hwframe_get_buffer(p->hw_pool, frame, 0) < 0)
@@ -112,19 +137,24 @@ static struct mp_image *get_hw_target(struct offscreen_ctx *ctx, int w, int h,
     if (!img)
         goto error;
 
-    tex = pl_d3d11_wrap(gpu, pl_d3d11_wrap_params(
-        .tex = (ID3D11Resource *)img->planes[0],
-        .array_slice = (intptr_t)img->planes[1],
-    ));
-    *target = talloc_zero(NULL, struct ra_tex);
-    if (!mppl_wrap_tex(ctx->ra, tex, *target) || !(*target)->params.render_dst)
-        goto error;
+    for (int n = 0; n < num_planes; n++) {
+        planes[n] = pl_d3d11_wrap(gpu, pl_d3d11_wrap_params(
+            .tex = (ID3D11Resource *)img->planes[0],
+            .array_slice = (intptr_t)img->planes[1],
+            .fmt = views[n].fmt,
+            .w = views[n].fmt ? w >> views[n].shift : 0,
+            .h = views[n].fmt ? h >> views[n].shift : 0,
+        ));
+        if (!planes[n] || !planes[n]->params.renderable)
+            goto error;
+    }
     return img;
 
 error:
-    mp_err(ctx->log, "Could not allocate a D3D11 hardware render target.\n");
-    pl_tex_destroy(gpu, &tex);
-    TA_FREEP(target);
+    mp_verbose(ctx->log, "Could not allocate a D3D11 %s hardware render target.\n",
+               mp_imgfmt_to_name(imgfmt));
+    for (int n = 0; n < num_planes; n++)
+        pl_tex_destroy(gpu, &planes[n]);
     av_frame_free(&frame);
     talloc_free(img);
     return NULL;
@@ -222,7 +252,7 @@ static struct offscreen_ctx *d3d11_offscreen_ctx_create(struct mpv_global *globa
     ctx->ra = ractx->ra;
     ctx->priv = d3d11ctx;
 #if HAVE_D3D_HWACCEL
-    ctx->get_hw_target = get_hw_target;
+    ctx->get_hw_frame = get_hw_frame;
 #endif
     talloc_set_destructor(ctx, d3d11_ctx_destroy);
 
