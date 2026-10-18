@@ -31,6 +31,7 @@
 #include "stream/stream.h"
 #include "video/filter/vf_gpu.h"
 #include "video/img_format.h"
+#include "video/mp_image_pool.h"
 #include "video/out/aspect.h"
 #include "video/out/gpu/video.h"
 #include "video/out/placebo/ra_pl.h"
@@ -106,6 +107,16 @@ struct gpu_opts {
     int hw_format;
 };
 
+// Number of software output frames that can be rendered and downloading at
+// once. While waiting for the oldest download, the GPU renders the others.
+#define DOWNLOAD_DEPTH 3
+
+struct download_slot {
+    struct ra_tex *tex;
+    pl_buf buf;
+    struct mp_image *img; // waiting for the download to finish, or NULL
+};
+
 struct priv {
     struct gpu_opts *opts;
     struct m_config_cache *vo_opts_cache;
@@ -126,6 +137,13 @@ struct priv {
     uint64_t next_frame_id;
     int hw_format; // surface format of hardware output, 0 for software output
     bool hw_output_resolved;
+
+    // Asynchronous software output: a ring of render targets downloaded into
+    // persistent buffers, read back only once the next frames are submitted.
+    bool async_download;
+    struct download_slot slots[DOWNLOAD_DEPTH];
+    int first_pending, num_pending;
+    struct mp_image_pool *pool;
 
     // Converts RGB to YUV hardware output.
     pl_log yuv_log;
@@ -219,6 +237,115 @@ static void destroy_planes(pl_gpu gpu, pl_tex planes[MP_MAX_PLANES])
 {
     for (int n = 0; n < MP_MAX_PLANES; n++)
         pl_tex_destroy(gpu, &planes[n]);
+}
+
+static struct ra_tex *create_target(struct ra *ra, int w, int h, bool yuv)
+{
+    // YUV conversion samples the target; use 16 bits to avoid rounding
+    // before the conversion.
+    struct ra_tex_params params = {
+        .dimensions = 2,
+        .downloadable = !yuv,
+        .w = w,
+        .h = h,
+        .d = 1,
+        .render_dst = true,
+        .render_src = yuv,
+        .src_linear = yuv,
+    };
+
+    if (yuv)
+        params.format = ra_find_unorm_format(ra, 2, 4);
+    if (!params.format || !params.format->renderable ||
+        !params.format->linear_filter)
+        params.format = ra_find_unorm_format(ra, 1, 4);
+
+    if (!params.format || !params.format->renderable)
+        return NULL;
+
+    return ra_tex_create(ra, &params);
+}
+
+// Downloads are asynchronous if the GPU can download into buffers.
+static bool can_download_async(struct ra *ra)
+{
+    pl_gpu gpu = ra_pl_get(ra);
+    return gpu && gpu->limits.buf_transfer;
+}
+
+static void clear_pending(struct priv *priv)
+{
+    for (int n = 0; n < DOWNLOAD_DEPTH; n++)
+        TA_FREEP(&priv->slots[n].img);
+    priv->first_pending = priv->num_pending = 0;
+}
+
+static void destroy_slots(struct priv *priv)
+{
+    clear_pending(priv);
+    for (int n = 0; n < DOWNLOAD_DEPTH; n++) {
+        struct download_slot *slot = &priv->slots[n];
+        ra_tex_free(priv->ctx->ra, &slot->tex);
+        pl_buf_destroy(ra_pl_get(priv->ctx->ra), &slot->buf);
+    }
+}
+
+static struct download_slot *next_slot(struct priv *priv)
+{
+    mp_assert(priv->num_pending < DOWNLOAD_DEPTH);
+    int n = (priv->first_pending + priv->num_pending) % DOWNLOAD_DEPTH;
+    return &priv->slots[n];
+}
+
+// Start downloading the slot's texture into its buffer.
+static bool start_download(struct ra *ra, struct download_slot *slot)
+{
+    pl_gpu gpu = ra_pl_get(ra);
+    pl_tex tex = ra_pl_tex_get(slot->tex);
+    size_t row_pitch = tex->params.w * tex->params.format->texel_size;
+    size_t size = row_pitch * tex->params.h;
+
+    if (!slot->buf) {
+        slot->buf = pl_buf_create(gpu, pl_buf_params(
+            .size = size,
+            .memory_type = PL_BUF_MEM_HOST,
+            .host_readable = true,
+        ));
+        if (!slot->buf)
+            return false;
+    }
+
+    if (!pl_tex_download(gpu, pl_tex_transfer_params(
+            .tex = tex,
+            .buf = slot->buf,
+            .row_pitch = row_pitch,
+        )))
+        return false;
+
+    // Start the rendering and download without waiting for them.
+    pl_gpu_flush(gpu);
+    return true;
+}
+
+// Wait for the slot's download and copy it to the slot's image.
+static bool finish_download(struct ra *ra, struct download_slot *slot)
+{
+    pl_gpu gpu = ra_pl_get(ra);
+    struct mp_image *img = slot->img;
+    size_t row_pitch = slot->tex->params.w * slot->tex->params.format->pixel_size;
+
+    while (pl_buf_poll(gpu, slot->buf, UINT64_MAX))
+        ;
+
+    if ((size_t)img->stride[0] == row_pitch)
+        return pl_buf_read(gpu, slot->buf, 0, img->planes[0], row_pitch * img->h);
+
+    for (int y = 0; y < img->h; y++) {
+        if (!pl_buf_read(gpu, slot->buf, y * row_pitch,
+                         img->planes[0] + y * img->stride[0], row_pitch))
+            return false;
+    }
+    return true;
 }
 
 // Return the hardware output surface format: the first candidate an encoder
@@ -387,12 +514,16 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         if (priv->hw_format) {
             MP_VERBOSE(f, "Rendering directly to %s hardware frames.\n",
                        mp_imgfmt_to_name(priv->hw_format));
+        } else if (can_download_async(ra)) {
+            priv->async_download = true;
+            MP_VERBOSE(f, "Downloading frames asynchronously.\n");
         }
     }
 
     pl_tex planes[MP_MAX_PLANES] = {0};
     struct ra_tex hw_target;
     struct ra_tex *fbo = priv->target;
+    struct download_slot *slot = NULL;
     if (priv->hw_format) {
         res = priv->ctx->get_hw_frame(priv->ctx, priv->hw_format, w, h, planes);
         if (!res)
@@ -404,31 +535,17 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         if (!mppl_wrap_tex(ra, planes[0], &hw_target))
             goto done;
         fbo = &hw_target;
-    } else if (!priv->target) {
-        // YUV conversion samples the target; use 16 bits to avoid rounding
-        // before the conversion.
-        bool yuv = priv->hw_format;
-        struct ra_tex_params params = {
-            .dimensions = 2,
-            .downloadable = !yuv,
-            .w = w,
-            .h = h,
-            .d = 1,
-            .render_dst = true,
-            .render_src = yuv,
-            .src_linear = yuv,
-        };
-
-        if (yuv)
-            params.format = ra_find_unorm_format(ra, 2, 4);
-        if (!params.format || !params.format->renderable ||
-            !params.format->linear_filter)
-            params.format = ra_find_unorm_format(ra, 1, 4);
-
-        if (!params.format || !params.format->renderable)
+    } else if (priv->async_download) {
+        // Render each frame in flight to its own target, so that rendering
+        // the next frame doesn't wait for the previous download.
+        slot = next_slot(priv);
+        if (!slot->tex)
+            slot->tex = create_target(ra, w, h, false);
+        if (!slot->tex)
             goto done;
-
-        priv->target = ra_tex_create(ra, &params);
+        fbo = slot->tex;
+    } else if (!priv->target) {
+        priv->target = create_target(ra, w, h, priv->hw_format);
         if (!priv->target)
             goto done;
         fbo = priv->target;
@@ -450,6 +567,17 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         pl_gpu_flush(ra_pl_get(ra));
         add_time(&priv->sync_ns, &priv->sync_max_ns, mp_time_ns() - sync_start);
         ok = true;
+        goto done;
+    }
+
+    if (slot) {
+        // gpu_process() queues the frame; finish_download() fills it later.
+        if (!start_download(ra, slot))
+            goto done;
+        if (!priv->pool)
+            priv->pool = mp_image_pool_new(priv);
+        res = mp_image_pool_get(priv->pool, IMGFMT_RGB0, w, h);
+        ok = !!res;
         goto done;
     }
 
@@ -476,10 +604,42 @@ done:
     return res;
 }
 
+// Output the oldest frame waiting for its download.
+static void output_pending(struct mp_filter *f)
+{
+    struct priv *priv = f->priv;
+    struct download_slot *slot = &priv->slots[priv->first_pending];
+    priv->first_pending = (priv->first_pending + 1) % DOWNLOAD_DEPTH;
+    priv->num_pending--;
+
+    int64_t start = mp_time_ns();
+    bool ok = offscreen_ctx_set_current(priv->ctx, true);
+    ok = ok && finish_download(priv->ctx->ra, slot);
+    ok = offscreen_ctx_set_current(priv->ctx, false) && ok;
+    add_time(&priv->sync_ns, &priv->sync_max_ns, mp_time_ns() - start);
+
+    struct mp_image *res = slot->img;
+    slot->img = NULL;
+    if (!ok) {
+        MP_ERR(f, "Could not retrieve frame.\n");
+        talloc_free(res);
+        mp_filter_internal_mark_failed(f);
+        return;
+    }
+
+    mp_pin_in_write(f->ppins[1], MAKE_FRAME(MP_FRAME_VIDEO, res));
+}
+
 static void gpu_process(struct mp_filter *f)
 {
     struct priv *priv = f->priv;
     bool context_current = false;
+
+    if (priv->num_pending == DOWNLOAD_DEPTH) {
+        if (mp_pin_in_needs_data(f->ppins[1]))
+            output_pending(f);
+        return;
+    }
 
     if (!mp_pin_can_transfer_data(f->ppins[1], priv->in_pin))
         return;
@@ -487,6 +647,12 @@ static void gpu_process(struct mp_filter *f)
     struct mp_frame frame = mp_pin_out_read(priv->in_pin);
 
     if (mp_frame_is_signaling(frame)) {
+        if (priv->num_pending) {
+            // Output the frames rendered before the signal first.
+            mp_pin_out_unread(priv->in_pin, frame);
+            output_pending(f);
+            return;
+        }
         mp_pin_in_write(f->ppins[1], frame);
         return;
     }
@@ -537,6 +703,14 @@ static void gpu_process(struct mp_filter *f)
 
     talloc_free(mpi);
 
+    if (priv->async_download) {
+        // Render the next frames while this one downloads.
+        next_slot(priv)->img = res;
+        priv->num_pending++;
+        mp_filter_internal_mark_progress(f);
+        return;
+    }
+
     mp_pin_in_write(f->ppins[1], MAKE_FRAME(MP_FRAME_VIDEO, res));
     return;
 
@@ -556,6 +730,7 @@ static void gpu_reset(struct mp_filter *f)
         return;
     }
     gl_video_reset(priv->renderer);
+    clear_pending(priv);
     if (!offscreen_ctx_set_current(priv->ctx, false))
         mp_filter_internal_mark_failed(f);
 }
@@ -581,6 +756,7 @@ static void gpu_destroy(struct mp_filter *f)
         pl_renderer_destroy(&priv->yuv_renderer);
         gl_video_uninit(priv->renderer);
         ra_tex_free(priv->ctx->ra, &priv->target);
+        destroy_slots(priv);
 
         offscreen_ctx_set_current(priv->ctx, false);
     }
