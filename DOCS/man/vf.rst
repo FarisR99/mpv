@@ -946,7 +946,10 @@ Available mpv-only filters are:
         each texture remains owned by the frame until its consumer releases it.
 
         For encoding, use an encoder accepting D3D11 frames, such as
-        ``--ovc=hevc_nvenc``. The encoder uses the filter's D3D11 device. Avoid
+        ``--ovc=hevc_nvenc``. Frames are mapped without copying for QSV
+        encoders accepting BGRA input, such as ``--ovc=hevc_qsv``; this requires
+        rendering on the Intel GPU (see ``--d3d11-adapter``). The encoder uses
+        the filter's D3D11 device. Avoid
         adding software filters or forcing a software output pixel format if
         the frames should stay on the GPU. Input frames are still uploaded to
         the renderer as usual.

@@ -44,6 +44,10 @@ struct priv {
 
     bool shutdown;
 
+    // Hardware frames are mapped from src_frames to mapped_frames if the
+    // encoder needs another hardware format (D3D11 to QSV).
+    AVBufferRef *src_frames, *mapped_frames;
+
     // Per-frame timing, logged on uninit for benchmarking.
     int64_t num_frames;
     int64_t encode_ns, encode_max_ns;
@@ -59,6 +63,56 @@ static int preinit(struct vo *vo)
     return 0;
 }
 
+// Return the encoder's hardware frame config for frames of the given hardware
+// format, preferring direct use over mapping. Only D3D11 to QSV is mapped.
+static const AVCodecHWConfig *get_hw_config(const AVCodec *codec,
+                                            enum AVPixelFormat hw_fmt)
+{
+    const AVCodecHWConfig *mapped = NULL;
+    for (int n = 0; ; n++) {
+        const AVCodecHWConfig *config = avcodec_get_hw_config(codec, n);
+        if (!config)
+            break;
+        if (!(config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_FRAMES_CTX))
+            continue;
+        if (config->pix_fmt == hw_fmt)
+            return config;
+        if (hw_fmt == AV_PIX_FMT_D3D11 && config->pix_fmt == AV_PIX_FMT_QSV)
+            mapped = config;
+    }
+    return mapped;
+}
+
+// Derive a frame context mapping src to the config's format. The result is
+// cached for src; NULL if mapping is not possible (e.g. on another vendor's GPU).
+static AVBufferRef *get_mapped_frames(struct vo *vo, AVBufferRef *src,
+                                      const AVCodecHWConfig *config)
+{
+    struct priv *vc = vo->priv;
+    if (vc->src_frames && vc->src_frames->data == src->data)
+        return vc->mapped_frames;
+
+    av_buffer_unref(&vc->src_frames);
+    av_buffer_unref(&vc->mapped_frames);
+    vc->src_frames = av_buffer_ref(src);
+    MP_HANDLE_OOM(vc->src_frames);
+
+    AVHWFramesContext *frames = (void *)src->data;
+    AVBufferRef *device = NULL;
+    if (av_hwdevice_ctx_create_derived(&device, config->device_type,
+                                       frames->device_ref, 0) < 0 ||
+        av_hwframe_ctx_create_derived(&vc->mapped_frames, config->pix_fmt,
+                                      device, src, AV_HWFRAME_MAP_DIRECT) < 0)
+    {
+        MP_VERBOSE(vo, "Could not map %s frames to %s for the encoder.\n",
+                   av_get_pix_fmt_name(frames->format),
+                   av_get_pix_fmt_name(config->pix_fmt));
+        av_buffer_unref(&vc->mapped_frames);
+    }
+    av_buffer_unref(&device);
+    return vc->mapped_frames;
+}
+
 static void uninit(struct vo *vo)
 {
     struct priv *vc = vo->priv;
@@ -66,6 +120,9 @@ static void uninit(struct vo *vo)
 
     if (!vc->shutdown)
         mp_encoder_encode(enc, NULL); // finish encoding
+
+    av_buffer_unref(&vc->src_frames);
+    av_buffer_unref(&vc->mapped_frames);
 
     if (vc->num_frames) {
         MP_VERBOSE(vo, "Timing: %"PRId64" frames, encode avg %.3f ms max %.3f ms.\n",
@@ -82,6 +139,19 @@ static int reconfig2(struct vo *vo, struct mp_image *img)
 
     struct mp_image_params *params = &img->params;
     enum AVPixelFormat pix_fmt = imgfmt2pixfmt(params->imgfmt);
+    AVBufferRef *hw_frames = img->hwctx;
+    if (hw_frames) {
+        const AVCodecHWConfig *config =
+            get_hw_config(encoder->codec, pix_fmt);
+        if (config && config->pix_fmt != pix_fmt) {
+            hw_frames = get_mapped_frames(vo, hw_frames, config);
+            if (!hw_frames) {
+                MP_FATAL(vo, "Could not map hardware frames for the encoder.\n");
+                goto error;
+            }
+            pix_fmt = config->pix_fmt;
+        }
+    }
     AVRational aspect = {params->p_w, params->p_h};
     int width = params->w;
     int height = params->h;
@@ -121,9 +191,9 @@ static int reconfig2(struct vo *vo, struct mp_image *img)
     encoder->width = width;
     encoder->height = height;
     encoder->pix_fmt = pix_fmt;
-    if (img->hwctx) {
+    if (hw_frames) {
         // Hardware encoders need the frame pool (and its device) before opening.
-        encoder->hw_frames_ctx = av_buffer_ref(img->hwctx);
+        encoder->hw_frames_ctx = av_buffer_ref(hw_frames);
         MP_HANDLE_OOM(encoder->hw_frames_ctx);
     }
     encoder->colorspace = pl_system_to_av(params->repr.sys);
@@ -190,7 +260,9 @@ static int query_format(struct vo *vo, int format)
         p++;
     }
 
-    return 0;
+    // Hardware frames which can be mapped to a format the encoder accepts.
+    const AVCodecHWConfig *config = get_hw_config(vc->enc->encoder->codec, pix_fmt);
+    return config && config->pix_fmt != pix_fmt;
 }
 
 static bool draw_frame(struct vo *vo, struct vo_frame *voframe)
@@ -247,6 +319,25 @@ static bool draw_frame(struct vo *vo, struct vo_frame *voframe)
     AVFrame *frame = mp_image_to_av_frame(mpi);
     MP_HANDLE_OOM(frame);
 
+    if (vc->mapped_frames && frame->format != avc->pix_fmt) {
+        AVFrame *mapped = av_frame_alloc();
+        MP_HANDLE_OOM(mapped);
+        mapped->format = avc->pix_fmt;
+        mapped->hw_frames_ctx = av_buffer_ref(vc->mapped_frames);
+        MP_HANDLE_OOM(mapped->hw_frames_ctx);
+        int err = av_hwframe_map(mapped, frame, AV_HWFRAME_MAP_DIRECT |
+                                                AV_HWFRAME_MAP_READ);
+        if (err >= 0)
+            err = av_frame_copy_props(mapped, frame);
+        av_frame_free(&frame);
+        if (err < 0) {
+            MP_ERR(vo, "Could not map hardware frame for the encoder.\n");
+            av_frame_free(&mapped);
+            goto done;
+        }
+        frame = mapped;
+    }
+
     frame->pts = rint(outpts * av_q2d(av_inv_q(avc->time_base)));
     frame->pict_type = 0; // keep this at unknown/undefined
     frame->quality = avc->global_quality;
@@ -280,16 +371,13 @@ static int control(struct vo *vo, uint32_t request, void *data)
             frames->sw_format != imgfmt2pixfmt(img->params.hw_subfmt))
             return VO_FALSE;
 
-        const AVCodec *codec = p->enc->encoder->codec;
-        for (int n = 0; ; n++) {
-            const AVCodecHWConfig *config = avcodec_get_hw_config(codec, n);
-            if (!config)
-                break;
-            if (config->pix_fmt == frames->format &&
-                (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_FRAMES_CTX))
-                return VO_TRUE;
-        }
-        return VO_FALSE;
+        const AVCodecHWConfig *config =
+            get_hw_config(p->enc->encoder->codec, frames->format);
+        if (!config)
+            return VO_FALSE;
+        if (config->pix_fmt == frames->format)
+            return VO_TRUE;
+        return get_mapped_frames(vo, img->hwctx, config) ? VO_TRUE : VO_FALSE;
     }
     return VO_NOTIMPL;
 }
