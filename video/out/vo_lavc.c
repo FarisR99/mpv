@@ -22,9 +22,11 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <libplacebo/utils/libav.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/pixdesc.h>
 
 #include "common/common.h"
 #include "options/options.h"
@@ -198,6 +200,21 @@ static int reconfig2(struct vo *vo, struct mp_image *img)
     }
     encoder->colorspace = pl_system_to_av(params->repr.sys);
     encoder->color_range = pl_levels_to_av(params->repr.levels);
+
+    // NVENC converts packed RGB input to limited range BT.601 YUV and signals
+    // that in the bitstream. Describe the output the same way, rather than as
+    // the RGB input, so the container does not contradict the bitstream.
+    enum AVPixelFormat data_fmt = hw_frames
+        ? ((AVHWFramesContext *)hw_frames->data)->sw_format : pix_fmt;
+    const AVPixFmtDescriptor *data_desc = av_pix_fmt_desc_get(data_fmt);
+    if (encoder->codec->wrapper_name &&
+        strcmp(encoder->codec->wrapper_name, "nvenc") == 0 && data_desc &&
+        (data_desc->flags & AV_PIX_FMT_FLAG_RGB) &&
+        !(data_desc->flags & AV_PIX_FMT_FLAG_PLANAR))
+    {
+        encoder->colorspace = AVCOL_SPC_BT470BG;
+        encoder->color_range = AVCOL_RANGE_MPEG;
+    }
 
     AVRational tb;
 
