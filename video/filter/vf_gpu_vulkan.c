@@ -33,6 +33,9 @@ static void vk_ctx_destroy(void *p)
 {
     struct offscreen_ctx *ctx = p;
     struct vk_offscreen_ctx *vkctx = ctx->priv;
+    // Creation failed before priv was set; the error path cleaned up already.
+    if (!vkctx)
+        return;
     struct ra_ctx *ractx = vkctx->ractx;
     struct mpvk_ctx *vk = vkctx->vk;
 
