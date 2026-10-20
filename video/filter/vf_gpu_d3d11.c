@@ -95,7 +95,8 @@ static bool init_hw_pool(struct offscreen_ctx *ctx, enum AVPixelFormat sw_format
 }
 
 static struct mp_image *get_hw_frame(struct offscreen_ctx *ctx, int imgfmt,
-                                    int w, int h, pl_tex planes[MP_MAX_PLANES])
+                                    int layout, int w, int h,
+                                    pl_tex planes[MP_MAX_PLANES])
 {
     struct d3d11_offscreen_ctx *p = ctx->priv;
     pl_gpu gpu = p->d3d11->gpu;

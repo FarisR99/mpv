@@ -138,6 +138,7 @@ struct priv {
     struct mp_image_params img_params;
     uint64_t next_frame_id;
     int hw_format; // surface format of hardware output, 0 for software output
+    int hw_layout; // offscreen_ctx.get_hw_frame layout of hw_format
     bool hw_output_resolved;
 
     // Asynchronous software output: a ring of render targets downloaded into
@@ -240,6 +241,13 @@ static void destroy_planes(pl_gpu gpu, pl_tex planes[MP_MAX_PLANES])
 {
     for (int n = 0; n < MP_MAX_PLANES; n++)
         pl_tex_destroy(gpu, &planes[n]);
+}
+
+// Hand a frame from get_hw_frame back to the backend. No-op if already done.
+static void end_hw_frame(struct offscreen_ctx *ctx)
+{
+    if (ctx->end_hw_frame)
+        ctx->end_hw_frame(ctx);
 }
 
 static struct ra_tex *create_target(struct ra *ra, int w, int h, bool yuv)
@@ -466,25 +474,35 @@ static int choose_hw_format(struct mp_filter *f, int w, int h)
     struct vo *vo = info ? info->dr_vo : NULL;
     bool encoding = vo && vo->driver->encode;
     pl_gpu gpu = ra_pl_get(priv->ctx->ra);
-    int fallback = 0;
+    int num_layouts = MPMAX(priv->ctx->num_hw_layouts, 1);
+    int fallback = 0, fallback_layout = 0;
     for (int n = 0; n < num_candidates; n++) {
-        pl_tex planes[MP_MAX_PLANES];
-        struct mp_image *img =
-            priv->ctx->get_hw_frame(priv->ctx, candidates[n], w, h, planes);
-        if (!img)
-            continue;
-        bool ok = encoding && vo_control(vo, VOCTRL_QUERY_HW_FRAME, img) == VO_TRUE;
-        destroy_planes(gpu, planes);
-        talloc_free(img);
-        if (ok)
-            return candidates[n];
-        if (!fallback)
-            fallback = candidates[n];
+        for (int layout = 0; layout < num_layouts; layout++) {
+            pl_tex planes[MP_MAX_PLANES];
+            struct mp_image *img = priv->ctx->get_hw_frame(priv->ctx,
+                                        candidates[n], layout, w, h, planes);
+            if (!img)
+                continue;
+            bool ok = encoding &&
+                      vo_control(vo, VOCTRL_QUERY_HW_FRAME, img) == VO_TRUE;
+            end_hw_frame(priv->ctx);
+            destroy_planes(gpu, planes);
+            talloc_free(img);
+            if (ok) {
+                priv->hw_layout = layout;
+                return candidates[n];
+            }
+            if (!fallback) {
+                fallback = candidates[n];
+                fallback_layout = layout;
+            }
+        }
     }
 
     if (priv->opts->hw_output > 0) {
         if (!fallback)
             MP_WARN(f, "Could not allocate hardware frames; using software output.\n");
+        priv->hw_layout = fallback_layout;
         return fallback;
     }
     MP_VERBOSE(f, "Encoder does not accept hardware frames from the renderer.\n");
@@ -627,7 +645,8 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
     struct ra_tex *fbo = priv->target;
     struct download_slot *slot = NULL;
     if (priv->hw_format) {
-        res = priv->ctx->get_hw_frame(priv->ctx, priv->hw_format, w, h, planes);
+        res = priv->ctx->get_hw_frame(priv->ctx, priv->hw_format,
+                                      priv->hw_layout, w, h, planes);
         if (!res)
             goto done;
     }
@@ -665,10 +684,12 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
 
     int64_t sync_start = mp_time_ns();
     if (priv->hw_format) {
-        // Submit the rendering without waiting for it. The consumer (such as
-        // NVENC) uses the same D3D11 device, so its reads are ordered after
-        // these writes. The AVHWFramesContext retains the texture until the
-        // consumer is done.
+        // Submit the rendering without waiting for it. With D3D11 the consumer
+        // (such as NVENC) uses the same device, so its reads are ordered after
+        // these writes; with Vulkan, end_hw_frame signals the frame's
+        // semaphore for it. The AVHWFramesContext retains the texture until
+        // the consumer is done.
+        end_hw_frame(priv->ctx);
         pl_gpu_flush(ra_pl_get(ra));
         add_time(&priv->sync_ns, &priv->sync_max_ns, mp_time_ns() - sync_start);
         ok = true;
@@ -701,6 +722,8 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
 
     ok = true;
 done:
+    if (priv->hw_format)
+        end_hw_frame(priv->ctx);
     destroy_planes(ra_pl_get(ra), planes);
     if (priv->ctx->debug_marker)
         priv->ctx->debug_marker(priv->ctx, "after rendering");
@@ -910,7 +933,8 @@ static struct mp_filter *gpu_create(struct mp_filter *parent, void *options)
     }
 
     if (priv->opts->hw_output > 0 && !priv->ctx->get_hw_frame) {
-        MP_FATAL(f, "Hardware output requires api=d3d11 and D3D hardware acceleration support.\n");
+        MP_FATAL(f, "Hardware output requires api=d3d11 (with D3D hardware "
+                    "acceleration support) or api=vulkan.\n");
         goto error;
     }
 

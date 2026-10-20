@@ -932,14 +932,14 @@ Available mpv-only filters are:
         use the size of the first filtered input frame.
 
     ``hw-output=<auto|yes|no>``
-        Output D3D11 hardware frames instead of downloading rendered pixels to
-        system memory. Requires ``api=d3d11`` and a build with D3D hardware
-        acceleration support. Other APIs reject ``yes``.
+        Output hardware frames instead of downloading rendered pixels to
+        system memory. Requires ``api=d3d11`` (with a build with D3D hardware
+        acceleration support), which outputs D3D11 frames, or ``api=vulkan``,
+        which outputs Vulkan frames. Other APIs reject ``yes``.
 
         ``auto`` (default) enables this when encoding with an encoder that
-        accepts the renderer's D3D11 frames directly, such as
-        ``--ovc=hevc_nvenc``, and downloads frames otherwise. ``no`` always
-        downloads frames.
+        accepts the renderer's frames, such as ``--ovc=hevc_nvenc``, and
+        downloads frames otherwise. ``no`` always downloads frames.
 
         Frames are rendered into a pool of textures on the rendering device
         (see ``hw-format``). Rendering is submitted before each frame is handed
@@ -953,6 +953,11 @@ Available mpv-only filters are:
         device. Avoid adding software filters or forcing a software output
         pixel format if the frames should stay on the GPU. Input frames are
         still uploaded to the renderer as usual.
+
+        With ``api=vulkan``, Vulkan encoders such as ``--ovc=hevc_vulkan`` use
+        the frames directly, on the filter's Vulkan device. NVENC encoders get
+        them through CUDA: each frame is copied on the GPU into a CUDA frame,
+        which needs a GPU and driver with Vulkan/CUDA interop (NVIDIA).
 
     ``hw-format=<auto|nv12|bgra>``
         Surface format of hardware output frames (default: auto).

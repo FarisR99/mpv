@@ -28,6 +28,11 @@
 #include <libavutil/hwcontext.h>
 #include <libavutil/pixdesc.h>
 
+#include "config.h"
+#if HAVE_VULKAN
+#include <libavutil/hwcontext_vulkan.h>
+#endif
+
 #include "common/common.h"
 #include "options/options.h"
 #include "misc/lavc_compat.h"
@@ -47,8 +52,10 @@ struct priv {
     bool shutdown;
 
     // Hardware frames are mapped from src_frames to mapped_frames if the
-    // encoder needs another hardware format (D3D11 to QSV).
+    // encoder needs another hardware format (D3D11 to QSV), or copied if
+    // transfer_frames is set (Vulkan to CUDA).
     AVBufferRef *src_frames, *mapped_frames;
+    bool transfer_frames;
 
     // Per-frame timing, logged on uninit for benchmarking.
     int64_t num_frames;
@@ -66,7 +73,8 @@ static int preinit(struct vo *vo)
 }
 
 // Return the encoder's hardware frame config for frames of the given hardware
-// format, preferring direct use over mapping. Only D3D11 to QSV is mapped.
+// format, preferring direct use over mapping. Only D3D11 to QSV is mapped, and
+// Vulkan to CUDA (NVENC) is copied.
 static const AVCodecHWConfig *get_hw_config(const AVCodec *codec,
                                             enum AVPixelFormat hw_fmt)
 {
@@ -81,8 +89,23 @@ static const AVCodecHWConfig *get_hw_config(const AVCodec *codec,
             return config;
         if (hw_fmt == AV_PIX_FMT_D3D11 && config->pix_fmt == AV_PIX_FMT_QSV)
             mapped = config;
+        if (hw_fmt == AV_PIX_FMT_VULKAN && config->pix_fmt == AV_PIX_FMT_CUDA)
+            mapped = config;
     }
     return mapped;
+}
+
+// Whether frames are allocated with one image per plane: CUDA can only import
+// those, and Vulkan encoders need multi-planar images.
+static bool vulkan_frames_per_plane(AVHWFramesContext *frames)
+{
+#if HAVE_VULKAN
+    AVVulkanFramesContext *vk_frames = frames->hwctx;
+    return frames->format == AV_PIX_FMT_VULKAN &&
+           (vk_frames->flags & AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE);
+#else
+    return false;
+#endif
 }
 
 // Derive a frame context mapping src to the config's format. The result is
@@ -101,18 +124,44 @@ static AVBufferRef *get_mapped_frames(struct vo *vo, AVBufferRef *src,
 
     AVHWFramesContext *frames = (void *)src->data;
     AVBufferRef *device = NULL;
+    vc->transfer_frames = frames->format == AV_PIX_FMT_VULKAN;
     if (av_hwdevice_ctx_create_derived(&device, config->device_type,
-                                       frames->device_ref, 0) < 0 ||
-        av_hwframe_ctx_create_derived(&vc->mapped_frames, config->pix_fmt,
-                                      device, src, AV_HWFRAME_MAP_DIRECT) < 0)
+                                       frames->device_ref, 0) < 0)
+        goto fail;
+
+    if (vc->transfer_frames) {
+        // CUDA can't map Vulkan frames, but copies them on the GPU. vf_gpu
+        // offers multi-planar frames first; quietly refuse those.
+        if (!vulkan_frames_per_plane(frames)) {
+            av_buffer_unref(&device);
+            return NULL;
+        }
+        vc->mapped_frames = av_hwframe_ctx_alloc(device);
+        MP_HANDLE_OOM(vc->mapped_frames);
+        AVHWFramesContext *dst = (void *)vc->mapped_frames->data;
+        dst->format = config->pix_fmt;
+        dst->sw_format = frames->sw_format;
+        dst->width = frames->width;
+        dst->height = frames->height;
+        if (av_hwframe_ctx_init(vc->mapped_frames) < 0)
+            goto fail;
+    } else if (av_hwframe_ctx_create_derived(&vc->mapped_frames, config->pix_fmt,
+                                             device, src,
+                                             AV_HWFRAME_MAP_DIRECT) < 0)
     {
-        MP_VERBOSE(vo, "Could not map %s frames to %s for the encoder.\n",
-                   av_get_pix_fmt_name(frames->format),
-                   av_get_pix_fmt_name(config->pix_fmt));
-        av_buffer_unref(&vc->mapped_frames);
+        goto fail;
     }
     av_buffer_unref(&device);
     return vc->mapped_frames;
+
+fail:
+    MP_VERBOSE(vo, "Could not %s %s frames to %s for the encoder.\n",
+               vc->transfer_frames ? "copy" : "map",
+               av_get_pix_fmt_name(frames->format),
+               av_get_pix_fmt_name(config->pix_fmt));
+    av_buffer_unref(&vc->mapped_frames);
+    av_buffer_unref(&device);
+    return NULL;
 }
 
 static void uninit(struct vo *vo)
@@ -285,6 +334,25 @@ static int query_format(struct vo *vo, int format)
     return config && config->pix_fmt != pix_fmt;
 }
 
+// Whether the encoder lists any software formats. Encoders such as
+// hevc_vulkan list only their hardware format, and check the surface format
+// themselves.
+static bool has_sw_formats(struct vo *vo)
+{
+    struct priv *vc = vo->priv;
+    const enum AVPixelFormat *p;
+    if (mp_avcodec_get_supported_config(vc->enc->encoder, NULL,
+                                        AV_CODEC_CONFIG_PIX_FORMAT,
+                                        (const void **)&p) < 0 || !p)
+        return true;
+    for (; *p != AV_PIX_FMT_NONE; p++) {
+        const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(*p);
+        if (desc && !(desc->flags & AV_PIX_FMT_FLAG_HWACCEL))
+            return true;
+    }
+    return false;
+}
+
 static bool draw_frame(struct vo *vo, struct vo_frame *voframe)
 {
     struct priv *vc = vo->priv;
@@ -345,13 +413,21 @@ static bool draw_frame(struct vo *vo, struct vo_frame *voframe)
         mapped->format = avc->pix_fmt;
         mapped->hw_frames_ctx = av_buffer_ref(vc->mapped_frames);
         MP_HANDLE_OOM(mapped->hw_frames_ctx);
-        int err = av_hwframe_map(mapped, frame, AV_HWFRAME_MAP_DIRECT |
+        int err;
+        if (vc->transfer_frames) {
+            err = av_hwframe_get_buffer(vc->mapped_frames, mapped, 0);
+            if (err >= 0)
+                err = av_hwframe_transfer_data(mapped, frame, 0);
+        } else {
+            err = av_hwframe_map(mapped, frame, AV_HWFRAME_MAP_DIRECT |
                                                 AV_HWFRAME_MAP_READ);
+        }
         if (err >= 0)
             err = av_frame_copy_props(mapped, frame);
         av_frame_free(&frame);
         if (err < 0) {
-            MP_ERR(vo, "Could not map hardware frame for the encoder.\n");
+            MP_ERR(vo, "Could not %s hardware frame for the encoder.\n",
+                   vc->transfer_frames ? "copy" : "map");
             av_frame_free(&mapped);
             goto done;
         }
@@ -383,7 +459,7 @@ static int control(struct vo *vo, uint32_t request, void *data)
         struct priv *p = vo->priv;
         struct mp_image *img = data;
         if (p->shutdown || !img->hwctx || !query_format(vo, img->imgfmt) ||
-            !query_format(vo, img->params.hw_subfmt))
+            (!query_format(vo, img->params.hw_subfmt) && has_sw_formats(vo)))
             return VO_FALSE;
 
         AVHWFramesContext *frames = (void *)img->hwctx->data;
@@ -395,8 +471,12 @@ static int control(struct vo *vo, uint32_t request, void *data)
             get_hw_config(p->enc->encoder->codec, frames->format);
         if (!config)
             return VO_FALSE;
-        if (config->pix_fmt == frames->format)
-            return VO_TRUE;
+        if (config->pix_fmt == frames->format) {
+            // Vulkan encoders read multi-planar images.
+            return !vulkan_frames_per_plane(frames) ||
+                   av_pix_fmt_count_planes(frames->sw_format) == 1
+                   ? VO_TRUE : VO_FALSE;
+        }
         return get_mapped_frames(vo, img->hwctx, config) ? VO_TRUE : VO_FALSE;
     }
     return VO_NOTIMPL;

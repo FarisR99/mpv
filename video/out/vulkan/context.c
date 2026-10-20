@@ -211,6 +211,10 @@ pl_vulkan mppl_create_vulkan(struct vulkan_opts *opts,
         VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME,
         VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME,
         VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME,
+        // For FFmpeg's Vulkan encoders, fed by vf_gpu hardware output.
+        VK_KHR_VIDEO_ENCODE_H264_EXTENSION_NAME,
+        VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME,
+        VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME,
         VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME,
         VK_KHR_VIDEO_MAINTENANCE_2_EXTENSION_NAME,
         VK_KHR_VIDEO_QUEUE_EXTENSION_NAME,
@@ -475,6 +479,7 @@ pl_vulkan mppl_create_vulkan(struct vulkan_opts *opts,
      * enabled if present.
      */
     VkQueueFlags extra_queues = VK_QUEUE_VIDEO_DECODE_BIT_KHR |
+                                VK_QUEUE_VIDEO_ENCODE_BIT_KHR |
                                 VK_QUEUE_OPTICAL_FLOW_BIT_NV;
 
     mp_assert(pllog);

@@ -38,8 +38,16 @@ struct offscreen_ctx {
     // IMGFMT_NV12) and wrap each of its planes as a renderable texture. The
     // caller owns the frame and the textures, and must submit rendering before
     // destroying the textures. Returns NULL if the format is unsupported.
+    // layout picks one of num_hw_layouts ways to allocate the frame (Vulkan:
+    // 0 is one multi-planar image, 1 is one image per plane, as CUDA needs).
     struct mp_image *(*get_hw_frame)(struct offscreen_ctx *ctx, int imgfmt,
-                                     int w, int h, pl_tex planes[MP_MAX_PLANES]);
+                                     int layout, int w, int h,
+                                     pl_tex planes[MP_MAX_PLANES]);
+    int num_hw_layouts; // 0 means 1
+
+    // If set, called after rendering into the textures from get_hw_frame and
+    // before destroying them, to hand the frame over to its consumer.
+    void (*end_hw_frame)(struct offscreen_ctx *ctx);
 };
 
 struct offscreen_context {
