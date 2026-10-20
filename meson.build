@@ -1430,6 +1430,13 @@ if features['cuda-interop'] and features['vulkan']
     sources += files('video/out/hwdec/hwdec_cuda_vk.c')
 endif
 
+# vf_gpu TrueHDR, through NVEncNVSDKNGX.dll
+features += {'vf-gpu-ngx': features['cuda-interop'] and features['vulkan'] and
+                           features['win32-desktop']}
+if features['vf-gpu-ngx']
+    sources += files('video/filter/vf_gpu_ngx.c')
+endif
+
 android_media_ndk = get_option('android-media-ndk').require(
     features['android'] and cc.has_header_symbol('media/NdkImageReader.h', 'AIMAGE_FORMAT_PRIVATE')
 )

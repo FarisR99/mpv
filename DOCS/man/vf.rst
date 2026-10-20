@@ -959,16 +959,17 @@ Available mpv-only filters are:
         them through CUDA: each frame is copied on the GPU into a CUDA frame,
         which needs a GPU and driver with Vulkan/CUDA interop (NVIDIA).
 
-    ``hw-format=<auto|nv12|bgra>``
+    ``hw-format=<auto|nv12|p010|bgra>``
         Surface format of hardware output frames (default: auto).
 
         ``nv12`` converts the rendered RGB to limited range 4:2:0 YUV on the
         GPU, using the BT.709 matrix (BT.2020 for BT.2020 primaries) and
-        left-sited chroma, so encoders do not convert it themselves. ``bgra``
-        outputs the rendered RGB. ``auto`` uses the first of ``nv12`` and
-        ``bgra`` the encoder accepts.
+        left-sited chroma, so encoders do not convert it themselves. ``p010``
+        does the same with 10 bits per sample. ``bgra`` outputs the rendered
+        RGB. ``auto`` uses the first of ``nv12`` and ``bgra`` the encoder
+        accepts.
 
-    ``sw-format=<auto|nv12|rgb>``
+    ``sw-format=<auto|nv12|p010|rgb>``
         Format of frames downloaded to system memory (default: auto).
 
         ``nv12`` converts the rendered RGB to 4:2:0 YUV on the GPU as with
@@ -979,7 +980,43 @@ Available mpv-only filters are:
         ``nv12`` when encoding with an encoder that accepts it, such as
         ``--ovc=hevc_nvenc``, and ``rgb`` otherwise. Encoders that only accept
         planar YUV, such as ``libx265``, can use ``nv12`` to convert in
-        software from YUV rather than RGB.
+        software from YUV rather than RGB. ``p010`` is the 10-bit equivalent
+        of ``nv12``.
+
+    ``truehdr=<yes|no>``
+        Convert the rendered SDR video to HDR10 with NVIDIA RTX Video TrueHDR
+        (default: no). TrueHDR runs
+        after everything else the renderer does, such as scaling and
+        ``--glsl-shaders``. The output is BT.2020 PQ, 10-bit 4:2:0
+        (``p010`` hardware or software frames), so use a 10-bit encoder
+        profile, such as ``--ovc=hevc_nvenc --ovcopts=profile=main10``.
+        ``hw-format`` and ``sw-format`` must not be set. The video must be
+        SDR.
+
+        This requires ``api=vulkan`` on Windows with an NVIDIA RTX GPU. The
+        RTX Video SDK is not linked; it is loaded at runtime through
+        ``NVEncNVSDKNGX.dll``, which needs ``nvngx_truehdr.dll`` and
+        ``cudart64_12.dll``. Place all three next to ``mpv.exe``. Frames stay
+        on the GPU: the filter's Vulkan textures are shared with CUDA.
+
+        The output is tagged with ``truehdr-max-luma`` as its peak, but no
+        HDR10 mastering display metadata is written.
+
+    ``truehdr-contrast=<0-200>``
+        Difference between lights and darks (default: 125).
+
+    ``truehdr-saturation=<0-200>``
+        Color intensity (default: 75).
+
+    ``truehdr-middle-gray=<10-100>``
+        Average brightness (default: 44).
+
+    ``truehdr-max-luma=<400-2000>``
+        Peak brightness in nits (default: 1000).
+
+        Settings quoted for NVIDIA's RTX HDR
+        driver feature use -100 to 100 for contrast and saturation; add 100
+        to those values here.
 
     .. warning::
 

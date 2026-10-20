@@ -30,6 +30,9 @@
 #include "osdep/timer.h"
 #include "stream/stream.h"
 #include "video/filter/vf_gpu.h"
+#if HAVE_VF_GPU_NGX
+#include "video/filter/vf_gpu_ngx.h"
+#endif
 #include "video/img_format.h"
 #include "video/mp_image_pool.h"
 #include "video/out/aspect.h"
@@ -106,6 +109,11 @@ struct gpu_opts {
     int hw_output;
     int hw_format;
     int sw_format;
+    bool truehdr;
+    int truehdr_contrast;
+    int truehdr_saturation;
+    int truehdr_middle_gray;
+    int truehdr_max_luma;
 };
 
 // Number of software output frames that can be rendered and downloading at
@@ -114,7 +122,7 @@ struct gpu_opts {
 
 struct download_slot {
     struct ra_tex *tex; // RGB output
-    pl_tex planes[MP_MAX_PLANES]; // NV12 output
+    pl_tex planes[MP_MAX_PLANES]; // NV12 or P010 output
     pl_buf buf;
     struct mp_image *img; // waiting for the download to finish, or NULL
 };
@@ -149,6 +157,12 @@ struct priv {
     int first_pending, num_pending;
     struct mp_image_pool *pool;
 
+#if HAVE_VF_GPU_NGX
+    // TrueHDR: renders into its input texture, then converts its output to
+    // HDR10 YUV.
+    struct vf_gpu_ngx *ngx;
+#endif
+
     // Converts RGB to YUV hardware output.
     pl_log yuv_log;
     pl_renderer yuv_renderer;
@@ -166,6 +180,33 @@ static void add_time(int64_t *total, int64_t *max, int64_t ns)
 {
     *total += ns;
     *max = MPMAX(*max, ns);
+}
+
+static bool is_yuv_format(int imgfmt)
+{
+    return imgfmt == IMGFMT_NV12 || imgfmt == IMGFMT_P010;
+}
+
+static bool want_truehdr(struct priv *priv)
+{
+#if HAVE_VF_GPU_NGX
+    return priv->ngx;
+#else
+    return false;
+#endif
+}
+
+// The color space of TrueHDR output: HDR10.
+static struct pl_color_space truehdr_color(struct priv *priv)
+{
+    return (struct pl_color_space) {
+        .primaries = PL_COLOR_PRIM_BT_2020,
+        .transfer = PL_COLOR_TRC_PQ,
+        .hdr = {
+            .min_luma = PL_COLOR_HDR_BLACK,
+            .max_luma = priv->opts->truehdr_max_luma,
+        },
+    };
 }
 
 static void shader_cache_init(struct mp_filter *f)
@@ -315,14 +356,15 @@ static bool init_slot(struct priv *priv, struct download_slot *slot, int w, int 
     struct ra *ra = priv->ctx->ra;
     pl_gpu gpu = ra_pl_get(ra);
 
-    if (priv->sw_format != IMGFMT_NV12) {
+    if (!is_yuv_format(priv->sw_format)) {
         if (!slot->tex)
             slot->tex = create_target(ra, w, h, false);
         return slot->tex;
     }
 
+    int depth = priv->sw_format == IMGFMT_P010 ? 16 : 8;
     for (int n = 0; n < 2 && !slot->planes[n]; n++) {
-        pl_fmt fmt = pl_find_fmt(gpu, PL_FMT_UNORM, n + 1, 8, 8,
+        pl_fmt fmt = pl_find_fmt(gpu, PL_FMT_UNORM, n + 1, depth, depth,
                                  PL_FMT_CAP_RENDERABLE | PL_FMT_CAP_HOST_READABLE);
         if (!fmt)
             return false;
@@ -426,20 +468,25 @@ static bool finish_download(struct ra *ra, struct download_slot *slot)
     return true;
 }
 
-// Return the software output format: NV12 if the GPU converts the output,
-// otherwise RGB0. In auto mode, NV12 is used when encoding with an encoder
-// that accepts it.
+// Return the software output format: NV12 or P010 if the GPU converts the
+// output, otherwise RGB0. In auto mode, NV12 is used when encoding with an
+// encoder that accepts it. TrueHDR always outputs P010. Returns 0 on error.
 static int choose_sw_format(struct mp_filter *f, int w, int h)
 {
     struct priv *priv = f->priv;
-    int fmt = priv->opts->sw_format;
+    int fmt = want_truehdr(priv) ? IMGFMT_P010 : priv->opts->sw_format;
     if (fmt == IMGFMT_RGB0)
         return fmt;
 
     if (!priv->async_download || w % 2 || h % 2) {
+        if (want_truehdr(priv)) {
+            MP_ERR(f, "TrueHDR requires an even output size.\n");
+            return 0;
+        }
         if (fmt)
-            MP_WARN(f, "NV12 output requires buffer downloads (such as with "
-                    "api=vulkan) and an even size; using RGB.\n");
+            MP_WARN(f, "%s output requires buffer downloads (such as with "
+                    "api=vulkan) and an even size; using RGB.\n",
+                    mp_imgfmt_to_name(fmt));
         return IMGFMT_RGB0;
     }
     if (fmt)
@@ -465,7 +512,10 @@ static int choose_hw_format(struct mp_filter *f, int w, int h)
 
     int candidates[] = {IMGFMT_NV12, IMGFMT_BGRA};
     int num_candidates = MP_ARRAY_SIZE(candidates);
-    if (priv->opts->hw_format) {
+    if (want_truehdr(priv)) {
+        candidates[0] = IMGFMT_P010;
+        num_candidates = 1;
+    } else if (priv->opts->hw_format) {
         candidates[0] = priv->opts->hw_format;
         num_candidates = 1;
     }
@@ -509,8 +559,10 @@ static int choose_hw_format(struct mp_filter *f, int w, int h)
     return 0;
 }
 
-// Convert the rendered RGB target to limited range YUV in the output planes.
-static bool render_yuv(struct mp_filter *f, pl_tex planes[MP_MAX_PLANES])
+// Convert the rendered RGB target to limited range YUV (NV12 or P010) in the
+// output planes. With TrueHDR, convert its output to HDR10 instead.
+static bool render_yuv(struct mp_filter *f, int imgfmt,
+                       pl_tex planes[MP_MAX_PLANES])
 {
     struct priv *priv = f->priv;
     pl_gpu gpu = ra_pl_get(priv->ctx->ra);
@@ -526,19 +578,50 @@ static bool render_yuv(struct mp_filter *f, pl_tex planes[MP_MAX_PLANES])
     struct pl_frame src = {
         .num_planes = 1,
         .planes = {{
-            .texture = ra_pl_tex_get(priv->target),
             .components = 3,
             .component_mapping = {PL_CHANNEL_R, PL_CHANNEL_G, PL_CHANNEL_B},
         }},
         .repr = pl_color_repr_rgb,
         .color = params->color,
     };
+    struct pl_color_space dst_color = params->color;
+    struct pl_color_adjustment adjustment = pl_color_adjustment_neutral;
 
+#if HAVE_VF_GPU_NGX
+    if (priv->ngx) {
+        if (pl_color_space_is_hdr(&params->color)) {
+            MP_ERR(f, "TrueHDR requires SDR video.\n");
+            return false;
+        }
+        src.planes[0].texture = vf_gpu_ngx_process(priv->ngx);
+        if (!src.planes[0].texture)
+            return false;
+        // TrueHDR outputs linear light in the input's primaries. Scale it
+        // to libplacebo's linear light, where 1.0 is SDR white. Source and
+        // target share their range, so nothing is tone mapped.
+        dst_color = truehdr_color(priv);
+        src.color = (struct pl_color_space) {
+            .primaries = params->color.primaries,
+            .transfer = PL_COLOR_TRC_LINEAR,
+            .hdr = dst_color.hdr,
+        };
+        adjustment.contrast = VF_GPU_NGX_LINEAR_NITS / PL_COLOR_SDR_WHITE;
+    }
+#endif
+    if (!src.planes[0].texture)
+        src.planes[0].texture = ra_pl_tex_get(priv->target);
+
+    int depth = imgfmt == IMGFMT_P010 ? 10 : 8;
     priv->yuv_repr = (struct pl_color_repr) {
-        .sys = params->color.primaries == PL_COLOR_PRIM_BT_2020
+        .sys = dst_color.primaries == PL_COLOR_PRIM_BT_2020
             ? PL_COLOR_SYSTEM_BT_2020_NC : PL_COLOR_SYSTEM_BT_709,
         .levels = PL_COLOR_LEVELS_LIMITED,
-        .bits = {.sample_depth = 8, .color_depth = 8},
+        // P010 keeps 10 bits in the high bits of each 16-bit sample.
+        .bits = {
+            .sample_depth = imgfmt == IMGFMT_P010 ? 16 : 8,
+            .color_depth = depth,
+            .bit_shift = imgfmt == IMGFMT_P010 ? 6 : 0,
+        },
     };
     struct pl_frame dst = {
         .num_planes = 2,
@@ -555,13 +638,14 @@ static bool render_yuv(struct mp_filter *f, pl_tex planes[MP_MAX_PLANES])
             },
         },
         .repr = priv->yuv_repr,
-        .color = params->color,
+        .color = dst_color,
     };
     pl_frame_set_chroma_location(&dst, PL_CHROMA_LEFT);
 
     return pl_render_image(priv->yuv_renderer, &src, &dst, pl_render_params(
         .plane_downscaler = &pl_filter_hermite,
         .dither_params = &pl_dither_default_params,
+        .color_adjustment = &adjustment,
     ));
 }
 
@@ -633,15 +717,21 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         } else {
             priv->async_download = can_download_async(ra);
             priv->sw_format = choose_sw_format(f, w, h);
+            if (!priv->sw_format)
+                goto done;
             MP_VERBOSE(f, "Downloading %s frames%s.\n",
                        mp_imgfmt_to_name(priv->sw_format),
                        priv->async_download ? " asynchronously" : "");
         }
     }
-    bool yuv = priv->hw_format == IMGFMT_NV12 || priv->sw_format == IMGFMT_NV12;
+    int out_format = priv->hw_format ? priv->hw_format : priv->sw_format;
+    bool yuv = is_yuv_format(out_format);
 
     pl_tex planes[MP_MAX_PLANES] = {0};
     struct ra_tex hw_target;
+#if HAVE_VF_GPU_NGX
+    struct ra_tex ngx_target;
+#endif
     struct ra_tex *fbo = priv->target;
     struct download_slot *slot = NULL;
     if (priv->hw_format) {
@@ -667,6 +757,14 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
         }
         if (slot && slot->tex) {
             fbo = slot->tex;
+        } else if (want_truehdr(priv)) {
+            // Render the SDR input for TrueHDR, which render_yuv converts.
+#if HAVE_VF_GPU_NGX
+            pl_tex tex = vf_gpu_ngx_get_input(priv->ngx, w, h);
+            if (!tex || !mppl_wrap_tex(ra, tex, &ngx_target))
+                goto done;
+            fbo = &ngx_target;
+#endif
         } else if (!priv->target) {
             priv->target = create_target(ra, w, h, yuv);
             if (!priv->target)
@@ -679,7 +777,7 @@ static struct mp_image *gpu_render_frame(struct mp_filter *f, struct mp_image *i
     int flags = RENDER_FRAME_SUBS | RENDER_FRAME_VF_SUBS;
     gl_video_render_frame(priv->renderer, &frame, &(struct ra_fbo){fbo}, flags);
 
-    if (yuv && !render_yuv(f, slot ? slot->planes : planes))
+    if (yuv && !render_yuv(f, out_format, slot ? slot->planes : planes))
         goto done;
 
     int64_t sync_start = mp_time_ns();
@@ -813,8 +911,8 @@ static void gpu_process(struct mp_filter *f)
 
     const struct mp_image_params *target =
         gl_video_get_target_params_ptr(priv->renderer);
-    res->params.color = target->color;
-    if (priv->hw_format == IMGFMT_NV12 || priv->sw_format == IMGFMT_NV12) {
+    res->params.color = want_truehdr(priv) ? truehdr_color(priv) : target->color;
+    if (is_yuv_format(priv->hw_format) || is_yuv_format(priv->sw_format)) {
         res->params.repr = priv->yuv_repr;
         res->params.chroma_location = PL_CHROMA_LEFT;
     } else {
@@ -882,6 +980,9 @@ static void gpu_destroy(struct mp_filter *f)
         offscreen_ctx_set_current(priv->ctx, true);
 
         pl_renderer_destroy(&priv->yuv_renderer);
+#if HAVE_VF_GPU_NGX
+        vf_gpu_ngx_destroy(&priv->ngx);
+#endif
         gl_video_uninit(priv->renderer);
         ra_tex_free(priv->ctx->ra, &priv->target);
         destroy_slots(priv);
@@ -938,6 +1039,33 @@ static struct mp_filter *gpu_create(struct mp_filter *parent, void *options)
         goto error;
     }
 
+    if (priv->opts->truehdr) {
+#if HAVE_VF_GPU_NGX
+        if (priv->opts->hw_format || priv->opts->sw_format) {
+            MP_FATAL(f, "TrueHDR always outputs P010; remove hw-format and "
+                        "sw-format.\n");
+            goto error;
+        }
+        pl_gpu gpu = ra_pl_get(priv->ctx->ra);
+        if (gpu) {
+            priv->ngx = vf_gpu_ngx_create(f->log, gpu, &(struct vf_gpu_ngx_params) {
+                .contrast = priv->opts->truehdr_contrast,
+                .saturation = priv->opts->truehdr_saturation,
+                .middle_gray = priv->opts->truehdr_middle_gray,
+                .max_luminance = priv->opts->truehdr_max_luma,
+            });
+        } else {
+            MP_FATAL(f, "TrueHDR requires api=vulkan.\n");
+        }
+        if (!priv->ngx)
+            goto error;
+#else
+        MP_FATAL(f, "TrueHDR requires a Windows build with Vulkan and CUDA "
+                    "interop.\n");
+        goto error;
+#endif
+    }
+
     if (priv->opts->hw_output <= 0 && !priv->ctx->ra->fns->tex_download) {
         MP_FATAL(f, "Offscreen ra context does not support image retrieval.\n");
         goto error;
@@ -990,6 +1118,11 @@ const struct mp_user_filter_entry vf_gpu = {
         .priv_size = sizeof(OPT_BASE_STRUCT),
         .priv_defaults = &(const OPT_BASE_STRUCT){
             .hw_output = -1,
+            // RTX HDR defaults
+            .truehdr_contrast = 125,
+            .truehdr_saturation = 75,
+            .truehdr_middle_gray = 44,
+            .truehdr_max_luma = 1000,
         },
         .options = (const struct m_option[]){
             {"w", OPT_INT(w)},
@@ -997,9 +1130,16 @@ const struct mp_user_filter_entry vf_gpu = {
             {"hw-output", OPT_CHOICE(hw_output,
                 {"auto", -1}, {"no", 0}, {"yes", 1})},
             {"hw-format", OPT_CHOICE(hw_format,
-                {"auto", 0}, {"nv12", IMGFMT_NV12}, {"bgra", IMGFMT_BGRA})},
+                {"auto", 0}, {"nv12", IMGFMT_NV12}, {"p010", IMGFMT_P010},
+                {"bgra", IMGFMT_BGRA})},
             {"sw-format", OPT_CHOICE(sw_format,
-                {"auto", 0}, {"nv12", IMGFMT_NV12}, {"rgb", IMGFMT_RGB0})},
+                {"auto", 0}, {"nv12", IMGFMT_NV12}, {"p010", IMGFMT_P010},
+                {"rgb", IMGFMT_RGB0})},
+            {"truehdr", OPT_BOOL(truehdr)},
+            {"truehdr-contrast", OPT_INT(truehdr_contrast), M_RANGE(0, 200)},
+            {"truehdr-saturation", OPT_INT(truehdr_saturation), M_RANGE(0, 200)},
+            {"truehdr-middle-gray", OPT_INT(truehdr_middle_gray), M_RANGE(10, 100)},
+            {"truehdr-max-luma", OPT_INT(truehdr_max_luma), M_RANGE(400, 2000)},
             {"api", OPT_STRING_VALIDATE(api, offscreen_ctx_validate_api),
                 .help = offscreen_ctx_api_help},
             {0}

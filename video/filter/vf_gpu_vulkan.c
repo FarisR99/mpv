@@ -263,9 +263,10 @@ static struct mp_image *get_hw_frame(struct offscreen_ctx *ctx, int imgfmt,
         num_planes = 1;
         break;
     case IMGFMT_NV12:
+    case IMGFMT_P010:
         if ((w | h) & 1)
             return NULL;
-        sw_format = AV_PIX_FMT_NV12;
+        sw_format = imgfmt == IMGFMT_P010 ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
         num_planes = 2;
         break;
     default:
