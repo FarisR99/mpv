@@ -253,6 +253,22 @@ static int reconfig2(struct vo *vo, struct mp_image *img)
     encoder->color_trc = pl_transfer_to_av(params->color.transfer);
     encoder->chroma_sample_location = pl_chroma_to_av(params->chroma_location);
 
+    // Encoders such as NVENC decide when opening whether to write HDR10
+    // metadata, from the stream's side data. Frames carry it too.
+    if (pl_color_transfer_is_hdr(params->color.transfer)) {
+        AVFrame *hdr = av_frame_alloc();
+        MP_HANDLE_OOM(hdr);
+        pl_avframe_set_color(hdr, params->color);
+        for (int n = 0; n < hdr->nb_side_data; n++) {
+            if (av_frame_side_data_clone(&encoder->decoded_side_data,
+                                         &encoder->nb_decoded_side_data,
+                                         hdr->side_data[n],
+                                         AV_FRAME_SIDE_DATA_FLAG_REPLACE) < 0)
+                MP_HANDLE_OOM(NULL);
+        }
+        av_frame_free(&hdr);
+    }
+
     // NVENC converts packed RGB input to limited range BT.601 YUV and signals
     // that in the bitstream. Describe the output the same way, rather than as
     // the RGB input, so the container does not contradict the bitstream.

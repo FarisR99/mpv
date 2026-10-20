@@ -196,15 +196,18 @@ static bool want_truehdr(struct priv *priv)
 #endif
 }
 
-// The color space of TrueHDR output: HDR10.
+// The color space of TrueHDR output: HDR10. Encoders write the metadata as
+// a BT.2020 mastering display with max-luma as its peak and the content's.
 static struct pl_color_space truehdr_color(struct priv *priv)
 {
     return (struct pl_color_space) {
         .primaries = PL_COLOR_PRIM_BT_2020,
         .transfer = PL_COLOR_TRC_PQ,
         .hdr = {
-            .min_luma = PL_COLOR_HDR_BLACK,
+            .prim = *pl_raw_primaries_get(PL_COLOR_PRIM_BT_2020),
+            .min_luma = 0.0001f,
             .max_luma = priv->opts->truehdr_max_luma,
+            .max_cll = priv->opts->truehdr_max_luma,
         },
     };
 }

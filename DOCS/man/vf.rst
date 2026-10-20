@@ -999,8 +999,10 @@ Available mpv-only filters are:
         ``cudart64_12.dll``. Place all three next to ``mpv.exe``. Frames stay
         on the GPU: the filter's Vulkan textures are shared with CUDA.
 
-        The output is tagged with ``truehdr-max-luma`` as its peak, but no
-        HDR10 mastering display metadata is written.
+        HDR10 metadata is attached for the encoder: a BT.2020 mastering
+        display with ``truehdr-max-luma`` as its peak, and the same value as
+        the maximum content light level. Encoders that write it, such as
+        ``hevc_nvenc``, put it in the bitstream.
 
     ``truehdr-contrast=<0-200>``
         Difference between lights and darks (default: 125).
