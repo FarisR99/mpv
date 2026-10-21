@@ -986,17 +986,20 @@ Available mpv-only filters are:
         them through CUDA: each frame is copied on the GPU into a CUDA frame,
         which needs a GPU and driver with Vulkan/CUDA interop (NVIDIA).
 
-    ``hw-format=<auto|nv12|p010|bgra>``
+    ``hw-format=<auto|nv12|p010|yuv444p10|bgra>``
         Surface format of hardware output frames (default: auto).
 
         ``nv12`` converts the rendered RGB to limited range 4:2:0 YUV on the
         GPU, using the BT.709 matrix (BT.2020 for BT.2020 primaries) and
         left-sited chroma, so encoders do not convert it themselves. ``p010``
-        does the same with 10 bits per sample. ``bgra`` outputs the rendered
-        RGB. ``auto`` uses the first of ``nv12`` and ``bgra`` the encoder
-        accepts.
+        does the same with 10 bits per sample. ``yuv444p10`` converts to 10-bit
+        4:4:4 YUV (full resolution chroma), stored as ``yuv444p16`` with the 10
+        bits in the high bits of each sample, as ``hevc_nvenc`` expects for
+        10-bit 4:4:4; it requires ``api=vulkan``. ``bgra`` outputs the
+        rendered RGB. ``auto`` uses the first of ``nv12`` and ``bgra`` the
+        encoder accepts.
 
-    ``sw-format=<auto|nv12|p010|rgb>``
+    ``sw-format=<auto|nv12|p010|yuv444p10|rgb>``
         Format of frames downloaded to system memory (default: auto).
 
         ``nv12`` converts the rendered RGB to 4:2:0 YUV on the GPU as with
@@ -1008,7 +1011,9 @@ Available mpv-only filters are:
         ``--ovc=hevc_nvenc``, and ``rgb`` otherwise. Encoders that only accept
         planar YUV, such as ``libx265``, can use ``nv12`` to convert in
         software from YUV rather than RGB. ``p010`` is the 10-bit equivalent
-        of ``nv12``.
+        of ``nv12``. ``yuv444p10`` converts to 10-bit 4:4:4 YUV, for encoders
+        such as ``libx265`` with ``--ovcopts=pix_fmt=yuv444p10le``; it also
+        requires an API that can download into buffers, but any output size.
 
     ``truehdr=<yes|no>``
         Convert the rendered SDR video to HDR10 with NVIDIA RTX Video TrueHDR

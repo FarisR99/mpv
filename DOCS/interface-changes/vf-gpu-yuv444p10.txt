@@ -1,0 +1,1 @@
+add `yuv444p10` to `vf_gpu`'s `hw-format` and `sw-format`

@@ -22,6 +22,13 @@
 #include "common/common.h"
 #include "video/mp_image.h"
 
+#include <libavutil/pixfmt.h>
+
+// 10-bit 4:4:4 output: yuv444p10 for software frames; yuv444p16 (10 bits in
+// the high bits, as NVENC expects) for hardware frames.
+#define IMGFMT_YUV444P10 (IMGFMT_AVPIXFMT_START + AV_PIX_FMT_YUV444P10)
+#define IMGFMT_YUV444P16 (IMGFMT_AVPIXFMT_START + AV_PIX_FMT_YUV444P16)
+
 struct mpv_global;
 struct mp_image;
 struct ra_tex;

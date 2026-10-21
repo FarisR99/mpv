@@ -269,6 +269,10 @@ static struct mp_image *get_hw_frame(struct offscreen_ctx *ctx, int imgfmt,
         sw_format = imgfmt == IMGFMT_P010 ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
         num_planes = 2;
         break;
+    case IMGFMT_YUV444P16:
+        sw_format = AV_PIX_FMT_YUV444P16;
+        num_planes = 3;
+        break;
     default:
         return NULL;
     }
@@ -300,14 +304,17 @@ static struct mp_image *get_hw_frame(struct offscreen_ctx *ctx, int imgfmt,
         vk_fmt = bgra_fmt;
     static const VkImageAspectFlags plane_aspect[] = {
         VK_IMAGE_ASPECT_PLANE_0_BIT, VK_IMAGE_ASPECT_PLANE_1_BIT,
+        VK_IMAGE_ASPECT_PLANE_2_BIT,
     };
+    // NV12/P010 chroma is half size; 4:4:4 planes are all full size.
+    int chroma_shift = sw_format == AV_PIX_FMT_YUV444P16 ? 0 : 1;
 
     for (int n = 0; n < num_planes; n++) {
         // The wrapped image starts out held by us.
         planes[n] = pl_vulkan_wrap(gpu, pl_vulkan_wrap_params(
             .image = vkf->img[multiplane ? 0 : n],
-            .width = n ? w / 2 : w,
-            .height = n ? h / 2 : h,
+            .width = n ? w >> chroma_shift : w,
+            .height = n ? h >> chroma_shift : h,
             .format = vk_fmt[n],
             .usage = vk_frames->usage,
             .aspect = multiplane ? plane_aspect[n] : VK_IMAGE_ASPECT_COLOR_BIT,

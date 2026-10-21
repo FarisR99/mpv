@@ -182,9 +182,15 @@ static void add_time(int64_t *total, int64_t *max, int64_t ns)
     *max = MPMAX(*max, ns);
 }
 
+static bool is_444_format(int imgfmt)
+{
+    return imgfmt == IMGFMT_YUV444P10 || imgfmt == IMGFMT_YUV444P16;
+}
+
 static bool is_yuv_format(int imgfmt)
 {
-    return imgfmt == IMGFMT_NV12 || imgfmt == IMGFMT_P010;
+    return imgfmt == IMGFMT_NV12 || imgfmt == IMGFMT_P010 ||
+           is_444_format(imgfmt);
 }
 
 static bool want_truehdr(struct priv *priv)
@@ -365,15 +371,18 @@ static bool init_slot(struct priv *priv, struct download_slot *slot, int w, int 
         return slot->tex;
     }
 
-    int depth = priv->sw_format == IMGFMT_P010 ? 16 : 8;
-    for (int n = 0; n < 2 && !slot->planes[n]; n++) {
-        pl_fmt fmt = pl_find_fmt(gpu, PL_FMT_UNORM, n + 1, depth, depth,
+    // NV12/P010: Y and interleaved half-size CbCr. 4:4:4: Y, Cb and Cr.
+    bool yuv444 = is_444_format(priv->sw_format);
+    int depth = priv->sw_format == IMGFMT_NV12 ? 8 : 16;
+    for (int n = 0; n < (yuv444 ? 3 : 2) && !slot->planes[n]; n++) {
+        int comps = yuv444 ? 1 : n + 1, shift = yuv444 ? 0 : n;
+        pl_fmt fmt = pl_find_fmt(gpu, PL_FMT_UNORM, comps, depth, depth,
                                  PL_FMT_CAP_RENDERABLE | PL_FMT_CAP_HOST_READABLE);
         if (!fmt)
             return false;
         slot->planes[n] = pl_tex_create(gpu, pl_tex_params(
-            .w = w >> n,
-            .h = h >> n,
+            .w = w >> shift,
+            .h = h >> shift,
             .format = fmt,
             .renderable = true,
             .host_readable = true,
@@ -481,15 +490,16 @@ static int choose_sw_format(struct mp_filter *f, int w, int h)
     if (fmt == IMGFMT_RGB0)
         return fmt;
 
-    if (!priv->async_download || w % 2 || h % 2) {
+    bool odd_420 = (w % 2 || h % 2) && !is_444_format(fmt);
+    if (!priv->async_download || odd_420) {
         if (want_truehdr(priv)) {
             MP_ERR(f, "TrueHDR requires an even output size.\n");
             return 0;
         }
         if (fmt)
             MP_WARN(f, "%s output requires buffer downloads (such as with "
-                    "api=vulkan) and an even size; using RGB.\n",
-                    mp_imgfmt_to_name(fmt));
+                    "api=vulkan)%s; using RGB.\n",
+                    mp_imgfmt_to_name(fmt), odd_420 ? " and an even size" : "");
         return IMGFMT_RGB0;
     }
     if (fmt)
@@ -562,8 +572,9 @@ static int choose_hw_format(struct mp_filter *f, int w, int h)
     return 0;
 }
 
-// Convert the rendered RGB target to limited range YUV (NV12 or P010) in the
-// output planes. With TrueHDR, convert its output to HDR10 instead.
+// Convert the rendered RGB target to limited range YUV (NV12, P010 or 10-bit
+// 4:4:4) in the output planes. With TrueHDR, convert its output to HDR10
+// instead.
 static bool render_yuv(struct mp_filter *f, int imgfmt,
                        pl_tex planes[MP_MAX_PLANES])
 {
@@ -614,16 +625,19 @@ static bool render_yuv(struct mp_filter *f, int imgfmt,
     if (!src.planes[0].texture)
         src.planes[0].texture = ra_pl_tex_get(priv->target);
 
-    int depth = imgfmt == IMGFMT_P010 ? 10 : 8;
+    bool yuv444 = is_444_format(imgfmt);
+    int depth = imgfmt == IMGFMT_NV12 ? 8 : 10;
+    // P010 and yuv444p16 keep 10 bits in the high bits of each 16-bit sample,
+    // yuv444p10 in the low bits.
+    bool msb = imgfmt == IMGFMT_P010 || imgfmt == IMGFMT_YUV444P16;
     priv->yuv_repr = (struct pl_color_repr) {
         .sys = dst_color.primaries == PL_COLOR_PRIM_BT_2020
             ? PL_COLOR_SYSTEM_BT_2020_NC : PL_COLOR_SYSTEM_BT_709,
         .levels = PL_COLOR_LEVELS_LIMITED,
-        // P010 keeps 10 bits in the high bits of each 16-bit sample.
         .bits = {
-            .sample_depth = imgfmt == IMGFMT_P010 ? 16 : 8,
+            .sample_depth = depth == 8 ? 8 : 16,
             .color_depth = depth,
-            .bit_shift = imgfmt == IMGFMT_P010 ? 6 : 0,
+            .bit_shift = msb ? 6 : 0,
         },
     };
     struct pl_frame dst = {
@@ -643,7 +657,17 @@ static bool render_yuv(struct mp_filter *f, int imgfmt,
         .repr = priv->yuv_repr,
         .color = dst_color,
     };
-    pl_frame_set_chroma_location(&dst, PL_CHROMA_LEFT);
+    if (yuv444) {
+        dst.num_planes = 3;
+        dst.planes[1].components = 1;
+        dst.planes[2] = (struct pl_plane) {
+            .texture = planes[2],
+            .components = 1,
+            .component_mapping = {PL_CHANNEL_CR},
+        };
+    } else {
+        pl_frame_set_chroma_location(&dst, PL_CHROMA_LEFT);
+    }
 
     return pl_render_image(priv->yuv_renderer, &src, &dst, pl_render_params(
         .plane_downscaler = &pl_filter_hermite,
@@ -917,7 +941,8 @@ static void gpu_process(struct mp_filter *f)
     res->params.color = want_truehdr(priv) ? truehdr_color(priv) : target->color;
     if (is_yuv_format(priv->hw_format) || is_yuv_format(priv->sw_format)) {
         res->params.repr = priv->yuv_repr;
-        res->params.chroma_location = PL_CHROMA_LEFT;
+        if (!is_444_format(priv->hw_format) && !is_444_format(priv->sw_format))
+            res->params.chroma_location = PL_CHROMA_LEFT;
     } else {
         res->params.repr.sys = target->repr.sys;
         res->params.repr.levels = target->repr.levels;
@@ -1134,10 +1159,10 @@ const struct mp_user_filter_entry vf_gpu = {
                 {"auto", -1}, {"no", 0}, {"yes", 1})},
             {"hw-format", OPT_CHOICE(hw_format,
                 {"auto", 0}, {"nv12", IMGFMT_NV12}, {"p010", IMGFMT_P010},
-                {"bgra", IMGFMT_BGRA})},
+                {"yuv444p10", IMGFMT_YUV444P16}, {"bgra", IMGFMT_BGRA})},
             {"sw-format", OPT_CHOICE(sw_format,
                 {"auto", 0}, {"nv12", IMGFMT_NV12}, {"p010", IMGFMT_P010},
-                {"rgb", IMGFMT_RGB0})},
+                {"yuv444p10", IMGFMT_YUV444P10}, {"rgb", IMGFMT_RGB0})},
             {"truehdr", OPT_BOOL(truehdr)},
             {"truehdr-contrast", OPT_INT(truehdr_contrast), M_RANGE(0, 200)},
             {"truehdr-saturation", OPT_INT(truehdr_saturation), M_RANGE(0, 200)},
