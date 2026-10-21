@@ -299,7 +299,8 @@ static void precreate_graph(struct lavfi *c, bool first_init)
                         filter->nb_outputs, first_init);
     } else {
         // Like avfilter_graph_parse2(), but filters such as hwupload need
-        // their device before they are initialized.
+        // their device before they are initialized. Creating the filters
+        // first is fine: segment_apply skips filters that already exist.
         AVFilterInOut *in = NULL, *out = NULL;
         AVFilterGraphSegment *seg = NULL;
         bool ok = avfilter_graph_segment_parse(c->graph, c->graph_string, 0,
@@ -310,9 +311,7 @@ static void precreate_graph(struct lavfi *c, bool first_init)
             filter->hw_device_ctx = av_buffer_ref(c->hw_device);
             MP_HANDLE_OOM(filter->hw_device_ctx);
         }
-        ok = ok && avfilter_graph_segment_apply_opts(seg, 0) >= 0 &&
-             avfilter_graph_segment_init(seg, 0) >= 0 &&
-             avfilter_graph_segment_link(seg, 0, &in, &out) >= 0;
+        ok = ok && avfilter_graph_segment_apply(seg, 0, &in, &out) >= 0;
         avfilter_graph_segment_free(&seg);
         if (!ok) {
             avfilter_inout_free(&in);
