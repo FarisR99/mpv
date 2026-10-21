@@ -82,6 +82,16 @@ this as well.
     filter. For example ``--vf=lavfi-scale=args`` would use libavfilter's
     ``scale`` filter over mpv's deprecated builtin one.
 
+    libavfilter names hardware filters ``<name>_<device type>``, such as
+    ``scale_cuda`` or ``fruc_cuda``. When such a filter is used this way, mpv
+    gives it a device of that type (the hardware decoder's, if it has one of
+    that type, otherwise a new one) and uploads frames to it first; frames
+    already on that type of device are passed through. If no such device can
+    be created, the filter fails with an error. For example,
+    ``--vf=gpu=api=vulkan,fruc_cuda`` doubles the frame rate after rendering,
+    keeping the frames on the GPU. Use ``lavfi`` with ``hwdevice`` for full
+    control.
+
 Video filters are managed in lists. There are a few commands to manage the
 filter list.
 
@@ -462,6 +472,7 @@ Available mpv-only filters are:
             ``--vf=gpu=api=vulkan:w=3840:h=2160,lavfi=[hwupload,fruc_cuda]:hwdevice=cuda --o=out.mkv --ovc=hevc_nvenc``
                 Hands the rendered Vulkan frames to CUDA and doubles the frame
                 rate with ``fruc_cuda``, without copying through system memory.
+                ``--vf=gpu=api=vulkan:w=3840:h=2160,fruc_cuda`` does the same.
 
 ``sub=[=bottom-margin:top-margin]``
     Moves subtitle rendering to an arbitrary point in the filter chain, or force

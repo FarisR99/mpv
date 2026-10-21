@@ -168,7 +168,7 @@ struct mp_filter *mp_create_user_filter(struct mp_filter *parent,
         if (strncmp(name, "lavfi-", 6) == 0)
             name += 6;
         struct mp_lavfi *l =
-            mp_lavfi_create_filter(parent, frame_type, true, NULL, NULL, name, args);
+            mp_lavfi_create_auto_filter(parent, frame_type, name, args);
         if (l)
             f = l->f;
         goto done;

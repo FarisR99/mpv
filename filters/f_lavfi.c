@@ -107,6 +107,8 @@ struct lavfi {
 
     // Device set on all filters before they are initialized (hwdevice option)
     AVBufferRef *hw_device;
+    // Direct filter only: put hwupload to hw_device in front of the filter
+    bool auto_upload;
 };
 
 struct lavfi_pad {
@@ -293,8 +295,24 @@ static void precreate_graph(struct lavfi *c, bool first_init)
             goto error;
         }
 
-        add_pads_direct(c, MP_PIN_IN, filter, filter->input_pads,
-                        filter->nb_inputs, first_init);
+        AVFilterContext *in_filter = filter;
+        if (c->auto_upload) {
+            in_filter = avfilter_graph_alloc_filter(c->graph,
+                                avfilter_get_by_name("hwupload"), "upload");
+            if (!in_filter)
+                goto error;
+            in_filter->hw_device_ctx = av_buffer_ref(c->hw_device);
+            MP_HANDLE_OOM(in_filter->hw_device_ctx);
+            if (avfilter_init_str(in_filter, NULL) < 0 ||
+                avfilter_link(in_filter, 0, filter, 0) < 0)
+            {
+                MP_FATAL(c, "could not upload to the filter's device\n");
+                goto error;
+            }
+        }
+
+        add_pads_direct(c, MP_PIN_IN, in_filter, in_filter->input_pads,
+                        in_filter->nb_inputs, first_init);
         add_pads_direct(c, MP_PIN_OUT, filter, filter->output_pads,
                         filter->nb_outputs, first_init);
     } else {
@@ -992,10 +1010,48 @@ struct mp_lavfi *mp_lavfi_create_graph(struct mp_filter *parent,
                         graph);
 }
 
+// FFmpeg names hardware filters <name>_<device type>, e.g. scale_cuda. They
+// take frames on that device, so give the filter such a device and upload
+// to it (hwupload passes frames through that are already there). Reuse the
+// hardware decoder's device of that type if there is one. Filters without
+// such a suffix are left alone.
+static bool setup_auto_hw(struct lavfi *c, const char *name)
+{
+    const char *suffix = strrchr(name, '_');
+    if (!suffix || c->force_type != MP_FRAME_VIDEO)
+        return true;
+    enum AVHWDeviceType type = av_hwdevice_find_type_by_name(suffix + 1);
+    if (type == AV_HWDEVICE_TYPE_NONE)
+        return true;
+
+    struct mp_stream_info *info = mp_filter_find_stream_info(c->f);
+    for (int n = 0; info && info->hwdec_devs; n++) {
+        struct mp_hwdec_ctx *dev = hwdec_devices_get_n(info->hwdec_devs, n);
+        if (!dev)
+            break;
+        AVBufferRef *ref = dev->av_device_ref;
+        if (ref && ((AVHWDeviceContext *)ref->data)->type == type) {
+            c->hw_device = av_buffer_ref(ref);
+            MP_HANDLE_OOM(c->hw_device);
+            break;
+        }
+    }
+    if (!c->hw_device &&
+        av_hwdevice_ctx_create(&c->hw_device, type, NULL, NULL, 0) < 0)
+    {
+        MP_FATAL(c, "%s needs a %s device, but none could be created\n",
+                 name, suffix + 1);
+        return false;
+    }
+    MP_VERBOSE(c, "Uploading to a %s device for %s\n", suffix + 1, name);
+    c->auto_upload = true;
+    return true;
+}
+
 static struct mp_lavfi *create_filter(struct mp_filter *parent,
                                       enum mp_frame_type type, bool bidir,
                                       char *hwdec_interop, const char *hwdevice,
-                                      char **graph_opts,
+                                      bool auto_hw, char **graph_opts,
                                       const char *filter, char **filter_opts)
 {
     struct lavfi *c = lavfi_alloc(parent);
@@ -1010,12 +1066,23 @@ static struct mp_lavfi *create_filter(struct mp_filter *parent,
     c->direct_filter_opts = mp_dup_str_array(c, filter_opts);
     c->direct_filter = true;
 
-    if (!create_hw_device(c, hwdevice)) {
+    if (!create_hw_device(c, hwdevice) ||
+        (auto_hw && !c->hw_device && !setup_auto_hw(c, filter)))
+    {
         talloc_free(c->f);
         return NULL;
     }
 
     return do_init(c);
+}
+
+struct mp_lavfi *mp_lavfi_create_auto_filter(struct mp_filter *parent,
+                                             enum mp_frame_type type,
+                                             const char *filter,
+                                             char **filter_opts)
+{
+    return create_filter(parent, type, true, NULL, NULL, true, NULL, filter,
+                         filter_opts);
 }
 
 struct mp_lavfi *mp_lavfi_create_filter(struct mp_filter *parent,
@@ -1024,8 +1091,8 @@ struct mp_lavfi *mp_lavfi_create_filter(struct mp_filter *parent,
                                         char **graph_opts,
                                         const char *filter, char **filter_opts)
 {
-    return create_filter(parent, type, bidir, hwdec_interop, NULL, graph_opts,
-                         filter, filter_opts);
+    return create_filter(parent, type, bidir, hwdec_interop, NULL, false,
+                         graph_opts, filter, filter_opts);
 }
 
 struct lavfi_user_opts {
@@ -1050,7 +1117,7 @@ static struct mp_filter *lavfi_create(struct mp_filter *parent, void *options)
     struct mp_lavfi *l;
     if (opts->is_bridge) {
         l = create_filter(parent, opts->type, true, opts->hwdec_interop,
-                          opts->hwdevice, opts->avopts,
+                          opts->hwdevice, false, opts->avopts,
                           opts->filter_name, opts->filter_opts);
     } else {
         l = create_graph(parent, opts->type, true, opts->hwdec_interop,

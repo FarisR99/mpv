@@ -31,6 +31,14 @@ struct mp_lavfi *mp_lavfi_create_filter(struct mp_filter *parent,
                                         char **graph_opts,
                                         const char *filter, char **filter_opts);
 
+// Like mp_lavfi_create_filter() with bidir set, for --vf=<filter name>. A
+// filter named <name>_<device type> (e.g. scale_cuda) gets a device of that
+// type, and an hwupload in front of it.
+struct mp_lavfi *mp_lavfi_create_auto_filter(struct mp_filter *parent,
+                                             enum mp_frame_type type,
+                                             const char *filter,
+                                             char **filter_opts);
+
 struct mp_log;
 // Print libavfilter list for --vf/--af
 void print_lavfi_help_list(struct mp_log *log, int media_type);

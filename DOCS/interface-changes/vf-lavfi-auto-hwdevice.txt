@@ -1,0 +1,1 @@
+filters used by name through the automatic `lavfi-bridge` that are named `<name>_<device type>` (e.g. `scale_cuda`) now get a hardware device of that type and an `hwupload` in front of them
