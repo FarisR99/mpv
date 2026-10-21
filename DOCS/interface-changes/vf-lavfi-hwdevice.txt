@@ -1,0 +1,1 @@
+add `hwdevice` sub-option to `vf_lavfi` and `vf_lavfi-bridge`

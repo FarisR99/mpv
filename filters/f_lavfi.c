@@ -28,6 +28,7 @@
 #include <libavutil/mathematics.h>
 #include <libavutil/rational.h>
 #include <libavutil/error.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
 #include <libavfilter/avfilter.h>
 #include <libavfilter/buffersink.h>
@@ -103,6 +104,9 @@ struct lavfi {
 
     // Identify a specific hwdec_interop to use
     char *hwdec_interop;
+
+    // Device set on all filters before they are initialized (hwdevice option)
+    AVBufferRef *hw_device;
 };
 
 struct lavfi_pad {
@@ -279,6 +283,11 @@ static void precreate_graph(struct lavfi *c, bool first_init)
                               c->direct_filter_opts) < 0)
             goto error;
 
+        if (c->hw_device) {
+            filter->hw_device_ctx = av_buffer_ref(c->hw_device);
+            MP_HANDLE_OOM(filter->hw_device_ctx);
+        }
+
         if (avfilter_init_str(filter, NULL) < 0) {
             MP_FATAL(c, "filter failed to initialize\n");
             goto error;
@@ -289,8 +298,25 @@ static void precreate_graph(struct lavfi *c, bool first_init)
         add_pads_direct(c, MP_PIN_OUT, filter, filter->output_pads,
                         filter->nb_outputs, first_init);
     } else {
+        // Like avfilter_graph_parse2(), but filters such as hwupload need
+        // their device before they are initialized.
         AVFilterInOut *in = NULL, *out = NULL;
-        if (avfilter_graph_parse2(c->graph, c->graph_string, &in, &out) < 0) {
+        AVFilterGraphSegment *seg = NULL;
+        bool ok = avfilter_graph_segment_parse(c->graph, c->graph_string, 0,
+                                               &seg) >= 0 &&
+                  avfilter_graph_segment_create_filters(seg, 0) >= 0;
+        for (int n = 0; ok && c->hw_device && n < c->graph->nb_filters; n++) {
+            AVFilterContext *filter = c->graph->filters[n];
+            filter->hw_device_ctx = av_buffer_ref(c->hw_device);
+            MP_HANDLE_OOM(filter->hw_device_ctx);
+        }
+        ok = ok && avfilter_graph_segment_apply_opts(seg, 0) >= 0 &&
+             avfilter_graph_segment_init(seg, 0) >= 0 &&
+             avfilter_graph_segment_link(seg, 0, &in, &out) >= 0;
+        avfilter_graph_segment_free(&seg);
+        if (!ok) {
+            avfilter_inout_free(&in);
+            avfilter_inout_free(&out);
             MP_FATAL(c, "parsing the filter graph failed\n");
             goto error;
         }
@@ -564,7 +590,7 @@ static void init_graph(struct lavfi *c)
 
     if (init_pads(c)) {
         struct mp_stream_info *info = mp_filter_find_stream_info(c->f);
-        if (info && info->hwdec_devs) {
+        if (!c->hw_device && info && info->hwdec_devs) {
             struct mp_hwdec_ctx *hwdec_ctx = NULL;
             if (c->hwdec_interop) {
                 int imgfmt =
@@ -819,6 +845,7 @@ static void lavfi_destroy(struct mp_filter *f)
 
     lavfi_reset(f);
     av_frame_free(&c->tmp_frame);
+    av_buffer_unref(&c->hw_device);
 }
 
 static bool lavfi_command(struct mp_filter *f, struct mp_filter_command *cmd)
@@ -914,10 +941,27 @@ error:
     return NULL;
 }
 
-struct mp_lavfi *mp_lavfi_create_graph(struct mp_filter *parent,
-                                       enum mp_frame_type type, bool bidir,
-                                       char *hwdec_interop,
-                                       char **graph_opts, const char *graph)
+// Create the device named by the hwdevice option (an AVHWDeviceType name).
+static bool create_hw_device(struct lavfi *c, const char *name)
+{
+    if (!name || !name[0])
+        return true;
+    enum AVHWDeviceType type = av_hwdevice_find_type_by_name(name);
+    if (type == AV_HWDEVICE_TYPE_NONE) {
+        MP_FATAL(c, "unknown hardware device type '%s'\n", name);
+        return false;
+    }
+    if (av_hwdevice_ctx_create(&c->hw_device, type, NULL, NULL, 0) < 0) {
+        MP_FATAL(c, "could not create a %s device\n", name);
+        return false;
+    }
+    return true;
+}
+
+static struct mp_lavfi *create_graph(struct mp_filter *parent,
+                                     enum mp_frame_type type, bool bidir,
+                                     char *hwdec_interop, const char *hwdevice,
+                                     char **graph_opts, const char *graph)
 {
     if (!graph)
         return NULL;
@@ -932,14 +976,28 @@ struct mp_lavfi *mp_lavfi_create_graph(struct mp_filter *parent,
     c->graph_string = talloc_strdup(c, graph);
     c->hwdec_interop = talloc_strdup(c, hwdec_interop);
 
+    if (!create_hw_device(c, hwdevice)) {
+        talloc_free(c->f);
+        return NULL;
+    }
+
     return do_init(c);
 }
 
-struct mp_lavfi *mp_lavfi_create_filter(struct mp_filter *parent,
-                                        enum mp_frame_type type, bool bidir,
-                                        char *hwdec_interop,
-                                        char **graph_opts,
-                                        const char *filter, char **filter_opts)
+struct mp_lavfi *mp_lavfi_create_graph(struct mp_filter *parent,
+                                       enum mp_frame_type type, bool bidir,
+                                       char *hwdec_interop,
+                                       char **graph_opts, const char *graph)
+{
+    return create_graph(parent, type, bidir, hwdec_interop, NULL, graph_opts,
+                        graph);
+}
+
+static struct mp_lavfi *create_filter(struct mp_filter *parent,
+                                      enum mp_frame_type type, bool bidir,
+                                      char *hwdec_interop, const char *hwdevice,
+                                      char **graph_opts,
+                                      const char *filter, char **filter_opts)
 {
     struct lavfi *c = lavfi_alloc(parent);
     if (!c)
@@ -953,7 +1011,22 @@ struct mp_lavfi *mp_lavfi_create_filter(struct mp_filter *parent,
     c->direct_filter_opts = mp_dup_str_array(c, filter_opts);
     c->direct_filter = true;
 
+    if (!create_hw_device(c, hwdevice)) {
+        talloc_free(c->f);
+        return NULL;
+    }
+
     return do_init(c);
+}
+
+struct mp_lavfi *mp_lavfi_create_filter(struct mp_filter *parent,
+                                        enum mp_frame_type type, bool bidir,
+                                        char *hwdec_interop,
+                                        char **graph_opts,
+                                        const char *filter, char **filter_opts)
+{
+    return create_filter(parent, type, bidir, hwdec_interop, NULL, graph_opts,
+                         filter, filter_opts);
 }
 
 struct lavfi_user_opts {
@@ -969,6 +1042,7 @@ struct lavfi_user_opts {
     bool fix_pts;
 
     char *hwdec_interop;
+    char *hwdevice;
 };
 
 static struct mp_filter *lavfi_create(struct mp_filter *parent, void *options)
@@ -976,12 +1050,12 @@ static struct mp_filter *lavfi_create(struct mp_filter *parent, void *options)
     struct lavfi_user_opts *opts = options;
     struct mp_lavfi *l;
     if (opts->is_bridge) {
-        l = mp_lavfi_create_filter(parent, opts->type, true,
-                                   opts->hwdec_interop, opts->avopts,
-                                   opts->filter_name, opts->filter_opts);
+        l = create_filter(parent, opts->type, true, opts->hwdec_interop,
+                          opts->hwdevice, opts->avopts,
+                          opts->filter_name, opts->filter_opts);
     } else {
-        l = mp_lavfi_create_graph(parent, opts->type, true, opts->hwdec_interop,
-                                  opts->avopts, opts->graph);
+        l = create_graph(parent, opts->type, true, opts->hwdec_interop,
+                         opts->hwdevice, opts->avopts, opts->graph);
     }
     if (l) {
         struct lavfi *c = l->f->priv;
@@ -1205,6 +1279,7 @@ const struct mp_user_filter_entry vf_lavfi = {
             {"hwdec_interop",
              OPT_STRING_VALIDATE(hwdec_interop,
                                  ra_hwdec_validate_drivers_only_opt)},
+            {"hwdevice", OPT_STRING(hwdevice)},
             {0}
         },
         .priv_defaults = &(const OPT_BASE_STRUCT){
@@ -1227,6 +1302,7 @@ const struct mp_user_filter_entry vf_lavfi_bridge = {
             {"hwdec_interop",
              OPT_STRING_VALIDATE(hwdec_interop,
                                  ra_hwdec_validate_drivers_only_opt)},
+            {"hwdevice", OPT_STRING(hwdevice)},
 
             {0}
         },

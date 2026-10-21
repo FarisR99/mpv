@@ -395,7 +395,7 @@ Available mpv-only filters are:
         libswscale and other FFmpeg components completely ignore this.
         ``none`` is available only starting from libplacebo vN.344.0.
 
-``lavfi=graph[:sws-flags[:o=opts]]``
+``lavfi=graph[:sws-flags[:o=opts][:hwdevice=type]]``
     Filter video using FFmpeg's libavfilter.
 
     ``<graph>``
@@ -446,6 +446,22 @@ Available mpv-only filters are:
 
             ``'--vf=lavfi=yadif:o="threads=2,thread_type=slice"'``
                 forces a specific threading configuration.
+
+    ``<hwdevice>``
+        Create a hardware device of this type (an FFmpeg device type name, such
+        as ``cuda`` or ``vulkan``) and give it to every filter in the graph
+        before they are initialized. This lets filters that need a device, such
+        as ``hwupload``, run without a hardware decoder, for example when
+        encoding with ``--o``. Hardware frames from an earlier filter, such as
+        ``vf=gpu`` with ``hw-output``, can be uploaded to the device directly.
+        Without this option, the graph uses the hardware decoding device, if
+        any, as before.
+
+        .. admonition:: Example
+
+            ``--vf=gpu=api=vulkan:w=3840:h=2160,lavfi=[hwupload,fruc_cuda]:hwdevice=cuda --o=out.mkv --ovc=hevc_nvenc``
+                Hands the rendered Vulkan frames to CUDA and doubles the frame
+                rate with ``fruc_cuda``, without copying through system memory.
 
 ``sub=[=bottom-margin:top-margin]``
     Moves subtitle rendering to an arbitrary point in the filter chain, or force
