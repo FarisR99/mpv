@@ -480,7 +480,7 @@ static void parse_content_range(CURL *c, int64_t *out_start, int64_t *out_end,
         return;
     bstr rest;
     long long v = bstrtoll(total, &rest, 10);
-    if (rest.len == 0 && v > 0)
+    if (rest.len == 0 && v >= 0)
         *out_total = v;
     bstr_eatstart0(&range, "bytes");
     bstr start, end;
@@ -515,10 +515,13 @@ static void finalize_probe(struct priv *p)
 static void check_http_reply(struct priv *p, long resp, int64_t range_start,
                              int64_t range_total)
 {
-    if (resp == 416 && p->content_size < 0) {
+    if (resp == 416 && p->content_size < 0 &&
+        (range_total < 0 || range_total <= p->request_start))
+    {
         // The request started past the end of a file of unknown size, so this
-        // is EOF. The reply tells the size if the server knows it by now.
-        if (range_total > 0 && range_total <= p->request_start) {
+        // is EOF. The reply tells the size if the server knows it by now. A
+        // 416 that states a size past the requested offset is an error.
+        if (range_total >= 0) {
             mp_mutex_lock(&p->mtx);
             p->content_size = range_total;
             mp_mutex_unlock(&p->mtx);
@@ -572,6 +575,16 @@ static void on_http_header(struct priv *p, struct bstr line)
     if (p->probed) {
         check_http_reply(p, resp, range_start, range_total);
         return;
+    }
+
+    // The first range of an empty file is not satisfiable.
+    if (resp == 416 && p->request_start == 0 && range_total <= 0) {
+        p->seekable = true;
+        p->content_size = 0;
+        p->finished = true;
+        p->reply_rejected = true;
+        p->stream_ok = true;
+        goto done;
     }
 
     if (!is_http_success(resp)) {
@@ -741,7 +754,7 @@ static void start_request(struct priv *p)
     bool chunked = ranged && p->opts->max_request_size > 0;
     bool capped = ranged && p->request_end > 0;
 
-    bool past_size = p->seekable && p->content_size > 0 && start >= p->content_size;
+    bool past_size = p->seekable && p->content_size >= 0 && start >= p->content_size;
     bool past_end = capped && start >= p->request_end;
     if (past_size || past_end) {
         p->finished = true;
@@ -817,7 +830,8 @@ static void on_done(struct priv *p, CURLcode code)
 
     // Roll completed bytes into request_start so retries and chunk
     // continuations resume at the next missing byte.
-    p->request_start += p->request_received;
+    uint64_t received = p->request_received;
+    p->request_start += received;
     p->request_received = 0;
 
     if (p->reply_rejected && !aborted) {
@@ -841,9 +855,15 @@ static void on_done(struct priv *p, CURLcode code)
         // A reply may end before the requested range does: servers cap their
         // replies, and with an unknown file size only a 416 marks the end.
         // Keep requesting from where this reply stopped.
-        bool past_size = p->content_size > 0 && p->request_start >= p->content_size;
+        bool past_size = p->content_size >= 0 && p->request_start >= p->content_size;
         bool past_end = p->request_end > 0 && p->request_start >= p->request_end;
         if (p->seekable && p->reply_end >= 0 && !past_size && !past_end) {
+            if (!received) {
+                // The same request would be repeated forever.
+                MP_ERR(p, "Server sent back no data at offset %" PRIu64 "\n",
+                       p->request_start);
+                goto error;
+            }
             start_request(p);
             return;
         }
@@ -872,6 +892,7 @@ static void on_done(struct priv *p, CURLcode code)
     if (!aborted)
         log_curl_error(p, "transfer failed", code);
 
+error:
     mp_mutex_lock(&p->mtx);
     p->stream_error = true;
     mp_cond_broadcast(&p->cond);

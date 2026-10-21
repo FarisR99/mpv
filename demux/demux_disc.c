@@ -28,8 +28,6 @@
 #include "packet.h"
 #include "stheader.h"
 
-#include "video/csputils.h"
-
 // DVD-Video has 32 subpicture (SPU) streams, mapped to PES substream IDs 0x20..0x3F.
 #define MAX_DVD_SPU_STREAMS 32
 
@@ -107,6 +105,9 @@ struct priv {
     bool nav_active;    // last interactive-nav state pushed to the cache
     uint32_t eof_log_id;    // last logged EOF state, avoids per-read spam
     bool eof_log_still;
+    int disc_audio_id; // last audio track selected by the disc itself, -1 = unknown
+    double seek_base_time; // playback time captured right after a seek
+    double pushed_tl_off;  // last raw->playback offset handed to the stream
 
     bool is_dvd, is_dvda, is_cdda, is_bd;
 
@@ -157,6 +158,30 @@ static bool slave_stream_enabled(struct priv *p, struct sh_stream *outer)
 static struct stream_timeline *get_stream_tl(struct priv *p,
                                              struct sh_stream *sh);
 
+// Tell the disc VM which audio track is playing, but only when the user moved
+// it. Echoing back what the disc just chose would fight it during transitions.
+static void push_active_track(demuxer_t *demuxer)
+{
+    struct priv *p = demuxer->priv;
+    if (!p->is_dvd)
+        return;
+
+    int selected = -1;
+    for (int i = 0; i < p->num_outer_streams; i++) {
+        struct sh_stream *sh = p->outer_streams[i];
+        if (sh && sh->type == STREAM_AUDIO && demux_stream_is_selected(sh)) {
+            selected = sh->demuxer_id;
+            break;
+        }
+    }
+    if (selected < 0 || selected == p->disc_audio_id)
+        return;
+
+    struct stream_track_req req = {.type = STREAM_AUDIO, .id = selected};
+    if (stream_control(demuxer->stream, STREAM_CTRL_SET_ACTIVE_TRACK, &req) >= 1)
+        p->disc_audio_id = selected;
+}
+
 static void reselect_streams(demuxer_t *demuxer)
 {
     struct priv *p = demuxer->priv;
@@ -183,6 +208,7 @@ static void reselect_streams(demuxer_t *demuxer)
             tl->was_selected = sel;
         }
     }
+    push_active_track(demuxer);
     arm_dvd_sub_holds(p);
 }
 
@@ -192,14 +218,36 @@ static void d_nav_refresh(demuxer_t *demuxer)
     arm_dvd_sub_holds(p);
 }
 
-static void get_disc_lang(struct stream *stream, struct sh_stream *sh, bool dvd)
+static void get_disc_track_info(struct stream *stream, struct sh_stream *sh, bool dvd)
 {
-    struct stream_lang_req req = {.type = sh->type, .id = sh->demuxer_id};
+    struct stream_track_req req = {.type = sh->type, .id = sh->demuxer_id};
     if (dvd && sh->type == STREAM_SUB)
         req.id = req.id & 0x1F; // mpeg ID to index
-    stream_control(stream, STREAM_CTRL_GET_LANG, &req);
+    stream_control(stream, STREAM_CTRL_GET_TRACK_INFO, &req);
     if (req.name[0])
         sh->lang = talloc_strdup(sh, req.name);
+    sh->forced_track |= !!(req.flags & TRACK_FORCED);
+    sh->visual_impaired_track |= !!(req.flags & TRACK_VISUAL_IMPAIRED);
+    sh->hearing_impaired_track |= !!(req.flags & TRACK_HEARING_IMPAIRED);
+    sh->commentary_track |= !!(req.flags & TRACK_COMMENTARY);
+}
+
+// A DVD keeps the subtitle palette in the PGC, not in the subpicture data, so
+// hand it to the decoder as emulated extradata.
+static void set_dvd_sub_palette(struct demuxer *demuxer, struct sh_stream *sh)
+{
+    struct stream_dvd_info_req info;
+    if (stream_control(demuxer->stream, STREAM_CTRL_GET_DVD_INFO, &info) <= 0)
+        return;
+
+    char *s = talloc_strdup(sh, "palette: ");
+    for (int i = 0; i < 16; i++)
+        s = talloc_asprintf_append(s, "%s%06x", i ? ", " : "", info.palette[i]);
+    s = talloc_asprintf_append(s, "\n");
+
+    talloc_free(sh->codec->extradata);
+    sh->codec->extradata = s;
+    sh->codec->extradata_size = strlen(s);
 }
 
 static void add_dvd_streams(demuxer_t *demuxer)
@@ -214,32 +262,11 @@ static void add_dvd_streams(demuxer_t *demuxer)
             struct sh_stream *sh = demux_alloc_sh_stream(STREAM_SUB);
             sh->demuxer_id = n + 0x20;
             sh->codec->codec = "dvd_subtitle";
-            get_disc_lang(stream, sh, true);
+            get_disc_track_info(stream, sh, true);
             p->dvd_subs[n] = sh;
             MP_TARRAY_APPEND(p, p->outer_streams, p->num_outer_streams, sh);
 
-            // emulate the extradata
-            struct mp_csp_params csp = MP_CSP_PARAMS_DEFAULTS;
-            struct pl_transform3x3 cmatrix;
-            mp_get_csp_matrix(&csp, &cmatrix);
-
-            char *s = talloc_strdup(sh, "");
-            s = talloc_asprintf_append(s, "palette: ");
-            for (int i = 0; i < 16; i++) {
-                int color = info.palette[i];
-                int y[3] = {(color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff};
-                int c[3];
-                mp_map_fixp_color(&cmatrix, 8, y, 8, c);
-                color = (c[2] << 16) | (c[1] << 8) | c[0];
-
-                if (i != 0)
-                    s = talloc_asprintf_append(s, ", ");
-                s = talloc_asprintf_append(s, "%06x", color);
-            }
-            s = talloc_asprintf_append(s, "\n");
-
-            sh->codec->extradata = s;
-            sh->codec->extradata_size = strlen(s);
+            set_dvd_sub_palette(demuxer, sh);
 
             demux_add_sh_stream(demuxer, sh);
         }
@@ -314,8 +341,10 @@ static void sync_streams(struct demuxer *demuxer)
 
     int nav_audio_id = -1;
     struct stream_nav_state nav = {0};
-    if (p->is_dvd && stream_control(demuxer->stream, STREAM_CTRL_GET_NAV_STATE, &nav) >= 1)
+    if (p->is_dvd && stream_control(demuxer->stream, STREAM_CTRL_GET_NAV_STATE, &nav) >= 1) {
         nav_audio_id = nav.active_audio_id;
+        p->disc_audio_id = nav_audio_id;
+    }
 
     int num_slave = demux_get_num_stream(p->slave);
     if (num_slave > p->slave_to_outer_count) {
@@ -371,7 +400,9 @@ static void sync_streams(struct demuxer *demuxer)
                     outer->codec->par_h = f.p_h;
                 }
             }
-            get_disc_lang(demuxer->stream, outer, p->is_dvd);
+            get_disc_track_info(demuxer->stream, outer, p->is_dvd);
+            if (p->is_dvd && outer->type == STREAM_SUB)
+                set_dvd_sub_palette(demuxer, outer);
             MP_TARRAY_APPEND(p, p->outer_streams, p->num_outer_streams, outer);
             demux_add_sh_stream(demuxer, outer);
         } else if (outer->type != STREAM_SUB && outer->codec && src->codec) {
@@ -387,6 +418,32 @@ static void sync_streams(struct demuxer *demuxer)
         }
 
         p->slave_to_outer[n] = outer;
+    }
+
+    // Mirror slave sh_stream_group onto the outer sh_streams. This is needed
+    // for the Dolby Vision BL+EL group, it's detected well by lavf. We could use
+    // the libbluray `dv_streams[]` info, but it's not available yet in release
+    // version, and mapping it through lavf is less code. The group has to form
+    // before the selection is propagated to the slave below.
+    for (int n = 0; n < num_slave; n++) {
+        struct sh_stream *outer = p->slave_to_outer[n];
+        if (!outer || outer->group)
+            continue;
+        struct sh_stream *src = demux_get_stream(p->slave, n);
+        if (!src || !src->group)
+            continue;
+        struct sh_stream_group *grp = talloc_zero(outer, struct sh_stream_group);
+        for (int m = 0; m < src->group->num_members; m++) {
+            struct sh_stream *member = src->group->members[m];
+            if (!member || member->index < 0 ||
+                member->index >= p->slave_to_outer_count)
+                continue;
+            struct sh_stream *outer_member = p->slave_to_outer[member->index];
+            if (!outer_member)
+                continue;
+            MP_TARRAY_APPEND(grp, grp->members, grp->num_members, outer_member);
+        }
+        demux_set_stream_group(demuxer, grp);
     }
 
     // Outer demuxer may have seen PMT with track that is not longer present in
@@ -413,31 +470,6 @@ static void sync_streams(struct demuxer *demuxer)
         struct sh_stream *outer = p->slave_to_outer[n];
         demuxer_select_track(p->slave, demux_get_stream(p->slave, n),
             MP_NOPTS_VALUE, outer && slave_stream_enabled(p, outer));
-    }
-
-    // Mirror slave sh_stream_group onto the outer sh_streams. This is needed
-    // for the Dolby Vision BL+EL group, it's detected well by lavf. We could use
-    // the libbluray `dv_streams[]` info, but it's not available yet in release
-    // version, and mapping it through lavf is less code.
-    for (int n = 0; n < num_slave; n++) {
-        struct sh_stream *outer = p->slave_to_outer[n];
-        if (!outer || outer->group)
-            continue;
-        struct sh_stream *src = demux_get_stream(p->slave, n);
-        if (!src || !src->group)
-            continue;
-        struct sh_stream_group *grp = talloc_zero(outer, struct sh_stream_group);
-        for (int m = 0; m < src->group->num_members; m++) {
-            struct sh_stream *member = src->group->members[m];
-            if (!member || member->index < 0 ||
-                member->index >= p->slave_to_outer_count)
-                continue;
-            struct sh_stream *outer_member = p->slave_to_outer[member->index];
-            if (!outer_member)
-                continue;
-            MP_TARRAY_APPEND(grp, grp->members, grp->num_members, outer_member);
-            outer_member->group = grp;
-        }
     }
 }
 
@@ -504,6 +536,15 @@ static void d_seek(demuxer_t *demuxer, double seek_pts, int flags)
         MP_VERBOSE(demuxer, "seek to: %f\n", stream_target);
         double seek_arg[] = {stream_target, stream_flags};
         stream_control(demuxer->stream, STREAM_CTRL_SEEK_TO_TIME, seek_arg);
+        // DVD-Audio answers where it landed straight away, and read-ahead
+        // spoils that answer within a few packets, so take it now. libdvdnav
+        // is the other way round, its VM has not moved until data is read, so
+        // that one is still asked later.
+        if (p->is_dvda) {
+            double landed;
+            if (stream_control(demuxer->stream, STREAM_CTRL_GET_CURRENT_TIME, &landed) >= 1)
+                p->seek_base_time = landed;
+        }
         if (p->is_bd) {
             // The reposition starts a new byte-stream run. Restart the byte
             // position counters, the slave's drop_buffers below resyncs the
@@ -533,7 +574,15 @@ static void d_seek(demuxer_t *demuxer, double seek_pts, int flags)
     if (p->is_dvd && stream_control(demuxer->stream, STREAM_CTRL_GET_NAV_STATE, &nav) >= 1)
         p->last_discontinuity_id = nav.discontinuity_id;
 
-    clear_dvd_sub_holds(p);
+    // The menu subpicture is one-shot. Resyncing while a still is held leaves
+    // the same menu on screen with no data left to redraw it, so keep what we
+    // retained and re-deliver it. A genuinely new subpicture replaces the hold
+    // when it arrives.
+    if (p->is_dvd && resync && nav.still_active) {
+        arm_dvd_sub_holds(p);
+    } else {
+        clear_dvd_sub_holds(p);
+    }
 
     // Re-inject the still for the new position.
     p->last_still_id = -1;
@@ -547,8 +596,12 @@ static void reset_pts(demuxer_t *demuxer)
     struct priv *p = demuxer->priv;
 
     double base;
-    if (stream_control(demuxer->stream, STREAM_CTRL_GET_CURRENT_TIME, &base) < 1)
+    if (p->seek_base_time != MP_NOPTS_VALUE) {
+        base = p->seek_base_time;
+    } else if (stream_control(demuxer->stream, STREAM_CTRL_GET_CURRENT_TIME, &base) < 1) {
         base = 0;
+    }
+    p->seek_base_time = MP_NOPTS_VALUE;
 
     MP_VERBOSE(demuxer, "reset to time: %f\n", base);
 
@@ -574,6 +627,18 @@ static struct stream_timeline *get_stream_tl(struct priv *p,
             p->tl_streams[n] = (struct stream_timeline){.last_raw = MP_NOPTS_VALUE};
     }
     return &p->tl_streams[sh->index];
+}
+
+// The disc VM needs the clip's own timestamps, but the player only knows
+// playback time. Hand the stream the offset between them so it can convert.
+static void push_timeline_offset(demuxer_t *demuxer)
+{
+    struct priv *p = demuxer->priv;
+    if (!p->is_bd || !p->tl_cur.have_off || p->tl_cur.off == p->pushed_tl_off)
+        return;
+    double off = p->tl_cur.off;
+    if (stream_control(demuxer->stream, STREAM_CTRL_SET_TIMELINE_OFFSET, &off) >= 1)
+        p->pushed_tl_off = off;
 }
 
 static void start_new_gen(struct priv *p, double off)
@@ -685,16 +750,23 @@ static void add_stream_chapters(struct demuxer *demuxer);
 // Sync demuxer->edition with the disc's current playback position.
 static void sync_initial_edition(struct demuxer *demuxer)
 {
+    struct stream_nav_state nav = {0};
+    bool in_disc_nav = stream_control(demuxer->stream, STREAM_CTRL_GET_NAV_STATE, &nav) >= 1
+                       && nav.nav_active && demuxer->num_editions > 0;
+
     unsigned title;
     if (stream_control(demuxer->stream, STREAM_CTRL_GET_CURRENT_TITLE, &title) >= 1 &&
         title < (unsigned)demuxer->num_editions)
-        demuxer->edition = title;
-    struct stream_nav_state nav = {0};
-    if (stream_control(demuxer->stream, STREAM_CTRL_GET_NAV_STATE, &nav) >= 1
-        && nav.menu_active && demuxer->num_editions > 0)
     {
+        demuxer->edition = title;
+    } else if (in_disc_nav) {
+        // The disc is playing something the title list does not contain, an
+        // intro or a menu. Point at the synthetic entry instead of leaving
+        // whichever edition happened to be marked before.
         demuxer->edition = demuxer->num_editions - 1;
     }
+    if (in_disc_nav && nav.menu_active)
+        demuxer->edition = demuxer->num_editions - 1;
 }
 
 static void refresh_disc_metadata(struct demuxer *demuxer)
@@ -1022,6 +1094,7 @@ static bool d_read_packet(struct demuxer *demuxer, struct demux_packet **out_pkt
         map_sub_packet(demuxer, sh, pkt);
     } else {
         map_av_packet(demuxer, sh, pkt);
+        push_timeline_offset(demuxer);
         p->av_map_seq++;
     }
 
@@ -1104,8 +1177,14 @@ static void add_stream_editions(struct demuxer *demuxer)
         double playlist = title;
         if (stream_control(demuxer->stream, STREAM_CTRL_GET_TITLE_PLAYLIST, &playlist) == STREAM_OK)
             time = talloc_asprintf_append(time, ") (%05.0f.mpls", playlist);
-        mp_tags_set_str(new.metadata, "TITLE",
-                        mp_tprintf(42, "title: %u (%s)", title + 1, time));
+        struct stream_name_req name = {.index = title};
+        if (stream_control(demuxer->stream, STREAM_CTRL_GET_TITLE_NAME, &name) >= 1) {
+            time = talloc_asprintf_append(time, ") (%s", name.name);
+            talloc_free(name.name);
+        }
+        char *label = talloc_asprintf(NULL, "title: %u (%s)", title + 1, time);
+        mp_tags_set_str(new.metadata, "TITLE", label);
+        talloc_free(label);
         talloc_free(time);
     }
 
@@ -1132,13 +1211,18 @@ static void add_stream_chapters(struct demuxer *demuxer)
         double p = n;
         if (stream_control(demuxer->stream, STREAM_CTRL_GET_CHAPTER_TIME, &p) < 1)
             continue;
-        demuxer_add_chapter(demuxer, "", p, 0);
+        struct stream_name_req req = {.index = n};
+        stream_control(demuxer->stream, STREAM_CTRL_GET_CHAPTER_NAME, &req);
+        demuxer_add_chapter(demuxer, req.name ? req.name : "", p, 0);
+        talloc_free(req.name);
     }
 }
 
 static int d_open(demuxer_t *demuxer, enum demux_check check)
 {
     struct priv *p = demuxer->priv = talloc_zero(demuxer, struct priv);
+    p->disc_audio_id = -1;
+    p->seek_base_time = MP_NOPTS_VALUE;
 
     if (check != DEMUX_CHECK_FORCE)
         return -1;
@@ -1176,6 +1260,16 @@ static int d_open(demuxer_t *demuxer, enum demux_check check)
 
     // Initialize the playback time. We need to read _some_ data to get the
     // correct stream-layer time (at least with libdvdnav).
+    //
+    // The peek fills a whole stream buffer, and DVD-Audio serves that in one
+    // read, so afterwards the disc reports a position already well past the
+    // title start and the whole timeline would be anchored there. Take the
+    // position first, the same way a seek does.
+    if (p->is_dvda) {
+        double start;
+        if (stream_control(demuxer->stream, STREAM_CTRL_GET_CURRENT_TIME, &start) >= 1)
+            p->seek_base_time = start;
+    }
     stream_read_peek(demuxer->stream, &(char){0}, 1);
     reset_pts(demuxer);
 

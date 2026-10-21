@@ -11,6 +11,16 @@ Track Selection
     will be used. A track that matches more subtags will be preferred over one
     that matches fewer. See also ``--aid``.
 
+    On a disc the list is also handed to the disc's own selection logic. A DVD
+    register holds a single two-letter ISO 639-1 code, so only the first
+    two-letter entry is used and longer ones are skipped. Blu-ray takes one
+    three-letter code, picked by matching the whole list against the disc.
+    Either way this only affects what the disc itself picks, mpv's own track
+    selection always uses the whole list.
+
+    ``--slang`` additionally chooses the DVD menu language. Discs that carry
+    only one menu language ignore it.
+
     This is a string list option. See `List Options`_ for details.
 
     .. admonition:: Examples
@@ -3928,8 +3938,17 @@ Disc Devices
 ``--disc-menu=<yes|no>``
     When set, opening ``dvd://`` or ``bd://`` boots into the disc's interactive
     menu instead of automatically playing the longest title (default: ``no``).
-    The menu can also be reached at any time via the synthetic "Disc Menu"
-    entry in the editions/titles list, or with ``discnav menu`` command.
+    On DVD the disc's virtual machine runs either way, so the menu can be
+    reached at any time via the synthetic "Disc Menu" entry in the
+    editions/titles list, or with the ``discnav menu`` command. A Blu-ray only
+    has disc navigation when playback started in menu mode, so neither is
+    available for a plain ``bd://``.
+
+    Blu-ray discs whose menus are BD-J rather than HDMV additionally need a
+    Java runtime and libbluray's BD-J jar (``libbluray-j2se-<version>.jar``).
+    libbluray should be able to find them automatically, but their locations
+    can also be overridden with the ``JAVA_HOME`` and ``LIBBLURAY_CP``
+    environment variables.
 
 ``--cdda-device=<path>``
     Specify the CD device for CDDA playback. The default device path depends on
@@ -3968,6 +3987,38 @@ Disc Devices
     .. admonition:: Example
 
         ``mpv bd:// --bluray-device=/path/to/bd/``
+
+``--bluray-region=<auto|a|b|c>``
+    Blu-ray player region code (default: auto). ``auto`` leaves libbluray's
+    own default in place, which is region B. Only matters for discs whose
+    menus or BD-J code check the player region.
+
+``--bluray-uo-restriction=<auto|disabled|relaxed|safe|compliant>``
+    How strictly to enforce the disc's User Operation prohibition masks
+    (default: auto, which leaves libbluray's default of ``relaxed`` in place).
+
+    Discs use these masks to make warnings and trailers unskippable.
+    ``disabled`` executes every operation unconditionally and may break
+    playback on some discs, ``compliant`` obeys the disc fully, and the two
+    values in between trade compliance for usability.
+
+``--bluray-min-title-length=<seconds>``
+    Ignore Blu-ray titles (playlists) shorter than this when building the
+    title list (default: 0, list every title). Discs commonly carry a large
+    number of very short playlists used only by the disc menus, and those show
+    up as editions. Setting this to something like 180 hides them.
+
+    If no title is long enough, the whole list is used instead, so that a disc
+    is never left unplayable by this.
+
+    Note that the title list is what ``bd://<N>`` and ``--edition`` index
+    into, so changing this renumbers them. ``bd://mpls/<NNNNN>`` is unaffected.
+    The language preferences are also picked from the titles that survive the
+    filter.
+
+``--bluray-key-file=<path>``
+    Path to a ``KEYDB.cfg`` unit key database, passed to libbluray for AACS
+    decryption (default: unset, let libaacs use its own configured location).
 
 ``--cdda-...``
     These options can be used to tune the CD Audio reading feature of mpv.
@@ -4011,6 +4062,11 @@ Disc Devices
     .. note::
 
         You need write access to the DVD device to change the speed.
+
+``--dvd-region=<auto|1-8>``
+    DVD player region code (default: auto). ``auto`` claims whichever regions
+    the disc itself allows, so region checks in the disc's own code pass.
+    Naming a region claims exactly that one.
 
 ``--dvd-angle=<ID>``
     Some DVDs contain scenes that can be viewed from multiple angles.
