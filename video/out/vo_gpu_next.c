@@ -82,6 +82,7 @@ struct scaler_params {
 
 struct user_hook {
     char *path;
+    bool half;
     const struct pl_hook *hook;
 };
 
@@ -2680,13 +2681,14 @@ static const struct pl_filter_config *map_scaler(struct priv *p,
     return &par->config;
 }
 
-static const struct pl_hook *load_hook(struct priv *p, const char *path)
+static const struct pl_hook *load_hook(struct priv *p, const char *path,
+                                       bool half)
 {
     if (!path || !path[0])
         return NULL;
 
     for (int i = 0; i < p->num_user_hooks; i++) {
-        if (strcmp(p->user_hooks[i].path, path) == 0)
+        if (strcmp(p->user_hooks[i].path, path) == 0 && p->user_hooks[i].half == half)
             return p->user_hooks[i].hook;
     }
 
@@ -2695,11 +2697,18 @@ static const struct pl_hook *load_hook(struct priv *p, const char *path)
     talloc_free(fname);
 
     const struct pl_hook *hook = NULL;
-    if (shader.len)
+    if (shader.len) {
+#if PL_API_VER >= 378
+        hook = pl_mpv_user_shader_parse_params(p->gpu, shader.start, shader.len,
+                    pl_mpv_user_shader_params(.half_precision = half));
+#else
         hook = pl_mpv_user_shader_parse(p->gpu, shader.start, shader.len);
+#endif
+    }
 
     MP_TARRAY_APPEND(p, p->user_hooks, p->num_user_hooks, (struct user_hook) {
         .path = talloc_strdup(p, path),
+        .half = half,
         .hook = hook,
     });
 
@@ -3001,7 +3010,7 @@ AV_NOWARN_DEPRECATED(
     pars->params.num_hooks = 0;
     const struct pl_hook *hook;
     for (int i = 0; opts->user_shaders && opts->user_shaders[i]; i++) {
-        if ((hook = load_hook(p, opts->user_shaders[i]))) {
+        if ((hook = load_hook(p, opts->user_shaders[i], opts->user_shader_half))) {
             MP_TARRAY_APPEND(p, p->hooks, pars->params.num_hooks, hook);
             update_hook_opts(p, opts->user_shader_opts, opts->user_shaders[i], hook);
         }

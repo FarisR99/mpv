@@ -548,6 +548,7 @@ const struct m_sub_options gl_video_conf = {
         {"glsl-shaders", OPT_PATHLIST(user_shaders), .flags = M_OPT_FILE},
         {"glsl-shader", OPT_CLI_ALIAS("glsl-shaders-append")},
         {"glsl-shader-opts", OPT_KEYVALUELIST(user_shader_opts)},
+        {"glsl-shader-half-precision", OPT_BOOL(user_shader_half)},
         {"deband", OPT_BOOL(deband)},
         {"deband", OPT_SUBSTRUCT(deband_opts, deband_conf)},
         {"sharpen", OPT_FLOAT(unsharp)},
@@ -2220,6 +2221,10 @@ static void user_hook(struct gl_video *p, struct image img,
         }
     }
 
+    // Precision qualifiers need GLSL 1.30 or ES; the shader's own code may
+    // then run with 16-bit floats.
+    if (p->opts.user_shader_half && (p->ra->glsl_version >= 130 || p->ra->glsl_es))
+        GLSLHF("precision mediump float;\n");
     load_shader(p, shader->pass_body);
 
     pass_describe(p, "user shader: %.*s (%s)", BSTR_P(shader->pass_desc),

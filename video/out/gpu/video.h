@@ -169,6 +169,7 @@ struct gl_video_opts {
     int blend_subs;
     char **user_shaders;
     char **user_shader_opts;
+    bool user_shader_half;
     bool deband;
     struct deband_opts *deband_opts;
     float unsharp;

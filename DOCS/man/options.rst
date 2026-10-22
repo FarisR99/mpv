@@ -6975,6 +6975,14 @@ them.
     ``avg_pq_y``
         Average PQ luminance (in PQ, 0-1).
 
+``--glsl-shader-half-precision=<yes|no>``
+    Run the ``--glsl-shaders`` user shaders' own code at reduced precision, by
+    declaring ``precision mediump float`` at the start of every pass. Drivers
+    may then use 16-bit floats, which some GPUs compute at twice the rate: on an
+    Intel UHD 770, Anime4K ran 70-80% faster with no visible change. Other
+    GPUs, such as NVIDIA's, gain nothing or lose a little. Only use it with
+    shaders that tolerate 16-bit intermediate values. (Default: no)
+
 ``--deband``
     Enable the debanding algorithm. This greatly reduces the amount of visible
     banding, blocking and other quantization artifacts, at the expense of
