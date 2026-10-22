@@ -1,0 +1,1 @@
+the `vulkan-copy` and `d3d11va-copy` hwdecs now decode on the device selected with `--vulkan-device` and `--d3d11-adapter` instead of the default device

@@ -17,9 +17,11 @@
 
 #include "config.h"
 
+#include <libavutil/hwcontext.h>
 #include <libavutil/uuid.h>
 
 #include "options/m_config.h"
+#include "video/hwdec.h"
 #include "video/out/placebo/ra_pl.h"
 #include "video/out/placebo/utils.h"
 
@@ -141,6 +143,71 @@ const struct m_sub_options vulkan_conf = {
         .async_compute = true,
     },
     .change_flags = UPDATE_VO,
+};
+
+// Device for copy hwdecs (vulkan-copy): the one selected with --vulkan-device,
+// rather than FFmpeg's default first device.
+static struct AVBufferRef *vk_create_standalone(struct mpv_global *global,
+        struct mp_log *log, struct hwcontext_create_dev_params *params)
+{
+    void *ta_ctx = talloc_new(NULL);
+    struct vulkan_opts *opts = mp_get_config_group(ta_ctx, global, &vulkan_conf);
+    AVBufferRef *ref = NULL;
+    char device[37] = {0};
+
+    if (opts->device && opts->device[0]) {
+        AVUUID uuid;
+        if (av_uuid_parse(opts->device, uuid) < 0) {
+            // FFmpeg matches device names by substring, so look the name up
+            // exactly as the renderer does and pass FFmpeg its UUID.
+            pl_log pllog = mppl_log_create(ta_ctx, log);
+            if (!pllog)
+                goto done;
+            mppl_log_set_probing(pllog, true);
+            pl_vk_inst inst = pl_vk_inst_create(pllog, pl_vk_inst_params());
+            VkPhysicalDevice dev = VK_NULL_HANDLE;
+            if (inst) {
+                dev = pl_vulkan_choose_device(pllog, pl_vulkan_device_params(
+                    .instance = inst->instance,
+                    .get_proc_addr = inst->get_proc_addr,
+                    .device_name = opts->device,
+                    .allow_software = true,
+                ));
+            }
+            if (dev) {
+                VkPhysicalDeviceIDProperties id_prop = {
+                    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES,
+                };
+                VkPhysicalDeviceProperties2 prop2 = {
+                    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+                    .pNext = &id_prop,
+                };
+                vkGetPhysicalDeviceProperties2(dev, &prop2);
+                av_uuid_copy(uuid, id_prop.deviceUUID);
+            }
+            pl_vk_inst_destroy(&inst);
+            pl_log_destroy(&pllog);
+            if (!dev) {
+                mp_msg(log, params->probing ? MSGL_V : MSGL_ERR,
+                       "Vulkan device '%s' not found.\n", opts->device);
+                goto done;
+            }
+        }
+        av_uuid_unparse(uuid, device);
+    }
+
+    if (av_hwdevice_ctx_create(&ref, AV_HWDEVICE_TYPE_VULKAN,
+                               device[0] ? device : NULL, NULL, 0) < 0)
+        ref = NULL;
+
+done:
+    talloc_free(ta_ctx);
+    return ref;
+}
+
+const struct hwcontext_fns hwcontext_fns_vulkan = {
+    .av_hwdevice_type = AV_HWDEVICE_TYPE_VULKAN,
+    .create_dev       = vk_create_standalone,
 };
 
 struct priv {

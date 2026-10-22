@@ -6401,6 +6401,8 @@ them.
     names and UUIDs. If left unspecified, the first enumerated hardware Vulkan
     device will be used.
 
+    The ``vulkan-copy`` hardware decoder decodes on this device too.
+
 ``--vulkan-swap-mode=<mode>``
     Controls the presentation mode of the vulkan swapchain. This is similar
     to the ``--opengl-swapinterval`` option.
@@ -6512,6 +6514,7 @@ them.
     Hardware decoders utilizing the D3D11 rendering abstraction's helper
     functionality to receive a device, such as D3D11VA or DXVA2's DXGI
     mode, will be affected by this choice.
+    The ``d3d11va-copy`` hardware decoder decodes on this adapter too.
 
 ``--d3d11-output-format=<auto|rgba8|bgra8|rgb10_a2|rgba16f>``
     Select a specific D3D11 output format to utilize for D3D11 rendering.

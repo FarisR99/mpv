@@ -37,6 +37,14 @@
 #include "video/mp_image_pool.h"
 #include "video/mp_image.h"
 
+#if HAVE_D3D11
+#include "options/m_config.h"
+#include "video/out/d3d11/context.h"
+#include "video/out/gpu/d3d11_helpers.h"
+
+extern const struct m_sub_options d3d11_conf;
+#endif
+
 #include "d3d.h"
 
 HMODULE d3d11_dll, d3d9_dll, dxva2_dll;
@@ -177,6 +185,7 @@ static struct AVBufferRef *d3d11_create_standalone(struct mpv_global *global,
         struct mp_log *plog, struct hwcontext_create_dev_params *params)
 {
     ID3D11Device *device = NULL;
+    IDXGIAdapter1 *adapter = NULL;
     HRESULT hr;
 
     d3d_load_dlls();
@@ -185,9 +194,27 @@ static struct AVBufferRef *d3d11_create_standalone(struct mpv_global *global,
         return NULL;
     }
 
-    hr = d3d11_D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL,
-                                 D3D11_CREATE_DEVICE_VIDEO_SUPPORT, NULL, 0,
+#if HAVE_D3D11
+    // Decode on the adapter selected with --d3d11-adapter, like the renderer.
+    struct d3d11_opts *opts = mp_get_config_group(NULL, global, &d3d11_conf);
+    if (opts->adapter_name && opts->adapter_name[0]) {
+        adapter = mp_get_dxgi_adapter(plog, bstr0(opts->adapter_name), NULL);
+        if (!adapter) {
+            mp_msg(plog, params->probing ? MSGL_V : MSGL_WARN,
+                   "Adapter matching '%s' was not found; using the default.\n",
+                   opts->adapter_name);
+        }
+    }
+    talloc_free(opts);
+#endif
+
+    // A specific adapter requires D3D_DRIVER_TYPE_UNKNOWN.
+    hr = d3d11_D3D11CreateDevice((IDXGIAdapter *)adapter,
+                                 adapter ? D3D_DRIVER_TYPE_UNKNOWN
+                                         : D3D_DRIVER_TYPE_HARDWARE,
+                                 NULL, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, NULL, 0,
                                  D3D11_SDK_VERSION, &device, NULL, NULL);
+    SAFE_RELEASE(adapter);
     if (FAILED(hr)) {
         mp_err(plog, "Failed to create D3D11 Device: %s\n",
                mp_HRESULT_to_str(hr));

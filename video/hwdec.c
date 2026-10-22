@@ -131,6 +131,9 @@ static const struct hwcontext_fns *const hwcontext_fns[] = {
 #if HAVE_VDPAU
     &hwcontext_fns_vdpau,
 #endif
+#if HAVE_VULKAN
+    &hwcontext_fns_vulkan,
+#endif
     NULL,
 };
 
