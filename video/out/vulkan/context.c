@@ -29,6 +29,7 @@
 
 struct vulkan_opts {
     char *device; // force a specific GPU
+    char *decode_device; // GPU for vulkan-copy; NULL or "auto" follows device
     int swap_mode;
     int queue_count;
     bool async_transfer;
@@ -120,10 +121,19 @@ done:
     return ret;
 }
 
+static inline OPT_STRING_VALIDATE_FUNC(vk_validate_decode_dev)
+{
+    if (*value && strcmp(*value, "auto") == 0)
+        return 0;
+    return vk_validate_dev(log, opt, name, value);
+}
+
 #define OPT_BASE_STRUCT struct vulkan_opts
 const struct m_sub_options vulkan_conf = {
     .opts = (const struct m_option[]) {
         {"vulkan-device", OPT_STRING_VALIDATE(device, vk_validate_dev)},
+        {"vulkan-decode-device",
+            OPT_STRING_VALIDATE(decode_device, vk_validate_decode_dev)},
         {"vulkan-swap-mode", OPT_CHOICE(swap_mode,
             {"auto",        -1},
             {"fifo",         VK_PRESENT_MODE_FIFO_KHR},
@@ -145,8 +155,9 @@ const struct m_sub_options vulkan_conf = {
     .change_flags = UPDATE_VO,
 };
 
-// Device for copy hwdecs (vulkan-copy): the one selected with --vulkan-device,
-// rather than FFmpeg's default first device.
+// Device for copy hwdecs (vulkan-copy): the one selected with
+// --vulkan-decode-device or else --vulkan-device, rather than FFmpeg's default
+// first device.
 static struct AVBufferRef *vk_create_standalone(struct mpv_global *global,
         struct mp_log *log, struct hwcontext_create_dev_params *params)
 {
@@ -155,9 +166,14 @@ static struct AVBufferRef *vk_create_standalone(struct mpv_global *global,
     AVBufferRef *ref = NULL;
     char device[37] = {0};
 
-    if (opts->device && opts->device[0]) {
+    const char *name = opts->device;
+    if (opts->decode_device && opts->decode_device[0] &&
+        strcmp(opts->decode_device, "auto") != 0)
+        name = opts->decode_device;
+
+    if (name && name[0]) {
         AVUUID uuid;
-        if (av_uuid_parse(opts->device, uuid) < 0) {
+        if (av_uuid_parse(name, uuid) < 0) {
             // FFmpeg matches device names by substring, so look the name up
             // exactly as the renderer does and pass FFmpeg its UUID.
             pl_log pllog = mppl_log_create(ta_ctx, log);
@@ -170,7 +186,7 @@ static struct AVBufferRef *vk_create_standalone(struct mpv_global *global,
                 dev = pl_vulkan_choose_device(pllog, pl_vulkan_device_params(
                     .instance = inst->instance,
                     .get_proc_addr = inst->get_proc_addr,
-                    .device_name = opts->device,
+                    .device_name = name,
                     .allow_software = true,
                 ));
             }
@@ -189,7 +205,7 @@ static struct AVBufferRef *vk_create_standalone(struct mpv_global *global,
             pl_log_destroy(&pllog);
             if (!dev) {
                 mp_msg(log, params->probing ? MSGL_V : MSGL_ERR,
-                       "Vulkan device '%s' not found.\n", opts->device);
+                       "Vulkan device '%s' not found.\n", name);
                 goto done;
             }
         }

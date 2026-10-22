@@ -6401,7 +6401,15 @@ them.
     names and UUIDs. If left unspecified, the first enumerated hardware Vulkan
     device will be used.
 
-    The ``vulkan-copy`` hardware decoder decodes on this device too.
+    The ``vulkan-copy`` hardware decoder decodes on this device too, unless
+    ``--vulkan-decode-device`` selects another.
+
+``--vulkan-decode-device=<auto|device name|UUID>``
+    The name or UUID of the Vulkan device the ``vulkan-copy`` hardware decoder
+    decodes on, so that decoding can run on a different GPU from rendering.
+    Use ``--vulkan-decode-device=help`` to list the devices. ``auto`` (the
+    default) uses the ``--vulkan-device`` device, or the first enumerated
+    hardware Vulkan device if that is unset as well.
 
 ``--vulkan-swap-mode=<mode>``
     Controls the presentation mode of the vulkan swapchain. This is similar
