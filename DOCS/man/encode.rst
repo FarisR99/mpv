@@ -71,6 +71,26 @@ You can encode files from one format/codec to another using this facility.
     ``--ovcopts=""``
         Completely empties the options list.
 
+``--ovc-device=<type>[:<device>]``
+    Opens a hardware device for the video encoder, as FFmpeg's
+    ``-init_hw_device`` does: an FFmpeg device type (``qsv``, ``cuda``,
+    ``vaapi``, ...) and optionally which device of that type. Hardware encoders
+    that get software frames then encode on that device, so that encoding can
+    run on a different GPU from decoding and rendering. Without it, they pick a
+    default device themselves. Ignored when the encoder gets hardware frames,
+    which already decide the device.
+
+    ``--ovc-device-opts=<key=value,...>``
+        Options for that device, as for ``-init_hw_device``.
+
+    .. admonition:: Examples
+
+        - ``--ovc=hevc_qsv --ovc-device=qsv:hw_any --ovc-device-opts=child_device=1``
+          encodes with QSV on the second DXGI adapter (``--d3d11-adapter=help``
+          lists them).
+        - ``--ovc=hevc_nvenc --ovc-device=cuda:1`` encodes with NVENC on the
+          second CUDA device.
+
 ``--orawts``
     Copies input pts to the output video (not supported by some output
     container formats, e.g. AVI). In this mode, discontinuities are not fixed

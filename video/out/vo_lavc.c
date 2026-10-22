@@ -33,6 +33,7 @@
 #include <libavutil/hwcontext_vulkan.h>
 #endif
 
+#include "common/av_common.h"
 #include "common/common.h"
 #include "options/options.h"
 #include "misc/lavc_compat.h"
@@ -183,6 +184,44 @@ static void uninit(struct vo *vo)
     }
 }
 
+// --ovc-device: open this device for the encoder, so that a hardware encoder
+// fed with software frames runs on a chosen GPU.
+static bool set_encoder_device(struct vo *vo, AVCodecContext *encoder)
+{
+    struct priv *vc = vo->priv;
+    struct encode_opts *opts = vc->enc->options;
+    bstr type, device = {0};
+    if (!bstr_split_tok(bstr0(opts->vdevice), ":", &type, &device))
+        type = bstr0(opts->vdevice);
+
+    void *ta_ctx = talloc_new(NULL);
+    char *type_name = bstrto0(ta_ctx, type);
+    char *device_name = device.len ? bstrto0(ta_ctx, device) : NULL;
+    AVDictionary *dict = NULL;
+    mp_set_avdict(&dict, opts->vdevice_opts);
+    bool ok = false;
+
+    enum AVHWDeviceType device_type = av_hwdevice_find_type_by_name(type_name);
+    if (device_type == AV_HWDEVICE_TYPE_NONE) {
+        MP_FATAL(vo, "Unknown --ovc-device type '%s'.\n", type_name);
+        goto done;
+    }
+    int ret = av_hwdevice_ctx_create(&encoder->hw_device_ctx, device_type,
+                                     device_name, dict, 0);
+    if (ret < 0) {
+        MP_FATAL(vo, "Could not open --ovc-device '%s': %s\n", opts->vdevice,
+                 av_err2str(ret));
+        goto done;
+    }
+    MP_VERBOSE(vo, "Encoder device: %s\n", opts->vdevice);
+    ok = true;
+
+done:
+    av_dict_free(&dict);
+    talloc_free(ta_ctx);
+    return ok;
+}
+
 static int reconfig2(struct vo *vo, struct mp_image *img)
 {
     struct priv *vc = vo->priv;
@@ -242,10 +281,17 @@ static int reconfig2(struct vo *vo, struct mp_image *img)
     encoder->width = width;
     encoder->height = height;
     encoder->pix_fmt = pix_fmt;
+    bool want_device = vc->enc->options->vdevice && vc->enc->options->vdevice[0];
     if (hw_frames) {
         // Hardware encoders need the frame pool (and its device) before opening.
         encoder->hw_frames_ctx = av_buffer_ref(hw_frames);
         MP_HANDLE_OOM(encoder->hw_frames_ctx);
+        if (want_device) {
+            MP_WARN(vo, "Ignoring --ovc-device: the encoder uses the device of "
+                        "the hardware frames it gets.\n");
+        }
+    } else if (want_device && !set_encoder_device(vo, encoder)) {
+        goto error;
     }
     encoder->colorspace = pl_system_to_av(params->repr.sys);
     encoder->color_range = pl_levels_to_av(params->repr.levels);

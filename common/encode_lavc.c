@@ -80,6 +80,8 @@ const struct m_sub_options encode_config = {
         {"ofopts", OPT_KEYVALUELIST(fopts), .flags = M_OPT_HAVE_HELP},
         {"ovc", OPT_STRING(vcodec)},
         {"ovcopts", OPT_KEYVALUELIST(vopts), .flags = M_OPT_HAVE_HELP},
+        {"ovc-device", OPT_STRING(vdevice)},
+        {"ovc-device-opts", OPT_KEYVALUELIST(vdevice_opts)},
         {"oac", OPT_STRING(acodec)},
         {"oacopts", OPT_KEYVALUELIST(aopts), .flags = M_OPT_HAVE_HELP},
         {"orawts", OPT_BOOL(rawts)},

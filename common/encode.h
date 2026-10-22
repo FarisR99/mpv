@@ -36,6 +36,8 @@ struct encode_opts {
     char **fopts;
     char *vcodec;
     char **vopts;
+    char *vdevice;
+    char **vdevice_opts;
     char *acodec;
     char **aopts;
     bool rawts;
