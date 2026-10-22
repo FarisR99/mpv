@@ -2698,7 +2698,7 @@ static const struct pl_hook *load_hook(struct priv *p, const char *path,
 
     const struct pl_hook *hook = NULL;
     if (shader.len) {
-#if PL_API_VER >= 378
+#ifdef pl_mpv_user_shader_params // MediaStack libplacebo only
         hook = pl_mpv_user_shader_parse_params(p->gpu, shader.start, shader.len,
                     pl_mpv_user_shader_params(.half_precision = half));
 #else
