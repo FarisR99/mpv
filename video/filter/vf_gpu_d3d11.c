@@ -123,6 +123,16 @@ static struct mp_image *get_hw_frame(struct offscreen_ctx *ctx, int imgfmt,
         views[1].fmt = DXGI_FORMAT_R8G8_UNORM;
         views[1].shift = 1;
         break;
+    case IMGFMT_P010:
+        if ((w | h) & 1)
+            return NULL;
+        sw_format = AV_PIX_FMT_P010;
+        num_planes = 2;
+        // 10 bits in the high bits of each 16-bit sample, as P010 stores them.
+        views[0].fmt = DXGI_FORMAT_R16_UNORM;
+        views[1].fmt = DXGI_FORMAT_R16G16_UNORM;
+        views[1].shift = 1;
+        break;
     default:
         return NULL;
     }

@@ -974,7 +974,9 @@ Available mpv-only filters are:
         releases it.
 
         For encoding, use an encoder accepting D3D11 frames, such as
-        ``--ovc=hevc_nvenc``. Frames are mapped without copying for QSV
+        ``--ovc=hevc_nvenc`` or ``--ovc=hevc_amf``. For 10-bit output, pass
+        ``hw-format=p010`` and select a 10-bit profile on the encoder, such as
+        ``profile=main10``. Frames are mapped without copying for QSV
         encoders, such as ``--ovc=hevc_qsv``; this requires rendering on the
         Intel GPU (see ``--d3d11-adapter``). The encoder uses the filter's D3D11
         device. Avoid adding software filters or forcing a software output
@@ -998,6 +1000,9 @@ Available mpv-only filters are:
         10-bit 4:4:4; it requires ``api=vulkan``. ``bgra`` outputs the
         rendered RGB. ``auto`` uses the first of ``nv12`` and ``bgra`` the
         encoder accepts.
+
+        ``api=d3d11`` supports ``nv12``, ``p010`` and ``bgra``. ``api=vulkan``
+        supports those and ``yuv444p10``.
 
     ``sw-format=<auto|nv12|p010|yuv444p10|rgb>``
         Format of frames downloaded to system memory (default: auto).
