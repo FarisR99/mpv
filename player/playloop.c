@@ -237,18 +237,6 @@ void step_frame_mute(struct MPContext *mpctx, bool mute)
     ao_set_gain(mpctx->ao_chain->ao, gain);
 }
 
-// Update the sparse video state during playback.
-static void update_sparse_video(struct MPContext *mpctx)
-{
-    struct vo_chain *vo_c = mpctx->vo_chain;
-    if (vo_c && !vo_c->is_sparse && vo_c->track && vo_c->track->stream &&
-        vo_c->track->stream->still_image)
-    {
-        MP_VERBOSE(mpctx, "video track consists of sparse still images\n");
-        vo_c->is_sparse = true;
-    }
-}
-
 // Clear some playback-related fields on file loading or after seeks.
 void reset_playback_state(struct MPContext *mpctx)
 {
@@ -260,8 +248,6 @@ void reset_playback_state(struct MPContext *mpctx)
 
     if (mpctx->demuxer)
         demux_nav_refresh(mpctx->demuxer);
-
-    update_sparse_video(mpctx);
 
     for (int n = 0; n < mpctx->num_tracks; n++) {
         struct track *t = mpctx->tracks[n];
@@ -1244,6 +1230,51 @@ static void handle_playback_restart(struct MPContext *mpctx)
     }
 }
 
+// Non-eager streams (sparse video, disc streams with no data in the current
+// segment) return EOF when they run dry and continue once new packets arrive.
+// The chain plays the EOF out normally and its decoder is destroyed. When the
+// stream continues, a new decoder is created and the chain restarts, like a
+// track switch does, but the VO, the AO and the displayed frame are kept.
+static void handle_lazy_streams(struct MPContext *mpctx)
+{
+    struct track *track = mpctx->vo_chain ? mpctx->vo_chain->track : NULL;
+    if (track) {
+        bool lazy = demux_stream_eof_is_lazy(track->stream);
+        if (!track->dec) {
+            // After a lazy EOF wait for packets, otherwise create the decoder
+            // right away. A syncing chain needs one to finish the restart,
+            // with a frame or with EOF.
+            if (!lazy || demux_stream_has_packets(track->stream) ||
+                mpctx->video_status == STATUS_SYNCING)
+            {
+                MP_VERBOSE(mpctx, "video stream delivers, new decoder\n");
+                reinit_video_decoder(mpctx);
+                mp_wakeup_core(mpctx);
+            }
+        } else if (mpctx->video_status == STATUS_EOF && lazy) {
+            MP_VERBOSE(mpctx, "video chain at EOF, decoder done\n");
+            uninit_video_decoder(mpctx);
+        }
+    }
+
+    track = mpctx->ao_chain ? mpctx->ao_chain->track : NULL;
+    if (track) {
+        bool lazy = demux_stream_eof_is_lazy(track->stream);
+        if (!track->dec) {
+            if (!lazy || demux_stream_has_packets(track->stream) ||
+                mpctx->audio_status == STATUS_SYNCING)
+            {
+                MP_VERBOSE(mpctx, "audio stream delivers, new decoder\n");
+                reinit_audio_decoder(mpctx);
+                mp_wakeup_core(mpctx);
+            }
+        } else if (mpctx->audio_status == STATUS_EOF && lazy) {
+            MP_VERBOSE(mpctx, "audio chain at EOF, decoder done\n");
+            uninit_audio_decoder(mpctx);
+        }
+    }
+}
+
 static void handle_eof(struct MPContext *mpctx)
 {
     if (mpctx->seek.type)
@@ -1268,6 +1299,19 @@ static void handle_eof(struct MPContext *mpctx)
         mpctx->video_status == STATUS_EOF &&
         !mpctx->stop_play)
     {
+        /* A chain without a decoder is waiting for its stream to continue
+         * (see handle_lazy_streams()). Only end the file if the demuxer
+         * reached EOF. */
+        bool waiting = (mpctx->vo_chain && mpctx->vo_chain->track &&
+                        !mpctx->vo_chain->track->dec) ||
+                       (mpctx->ao_chain && mpctx->ao_chain->track &&
+                        !mpctx->ao_chain->track->dec);
+        if (waiting) {
+            struct demux_reader_state s;
+            demux_get_reader_state(mpctx->demuxer, &s);
+            if (!s.eof)
+                return;
+        }
         mpctx->stop_play = AT_END_OF_FILE;
     }
 }
@@ -1287,8 +1331,6 @@ void run_playloop(struct MPContext *mpctx)
 
     update_demuxer_properties(mpctx);
 
-    update_sparse_video(mpctx);
-
     update_vo_chain_el_pair(mpctx);
 
     handle_cursor_autohide(mpctx);
@@ -1300,6 +1342,8 @@ void run_playloop(struct MPContext *mpctx)
 
     fill_audio_out_buffers(mpctx);
     write_video(mpctx);
+
+    handle_lazy_streams(mpctx);
 
     handle_playback_restart(mpctx);
 

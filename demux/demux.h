@@ -308,9 +308,12 @@ int demux_read_packet_async(struct sh_stream *sh, struct demux_packet **out_pkt)
 int demux_read_packet_async_until(struct sh_stream *sh, double min_pts,
                                   struct demux_packet **out_pkt);
 bool demux_stream_is_selected(struct sh_stream *stream);
+bool demux_stream_eof_is_lazy(struct sh_stream *stream);
+bool demux_stream_has_packets(struct sh_stream *stream);
 void demux_set_stream_wakeup_cb(struct sh_stream *sh,
                                 void (*cb)(void *ctx), void *ctx);
-struct demux_packet *demux_read_any_packet(struct demuxer *demuxer);
+struct demux_packet *demux_read_any_packet(struct demuxer *demuxer,
+                                           bool *new_streams);
 
 struct sh_stream *demux_get_stream(struct demuxer *demuxer, int index);
 int demux_get_num_stream(struct demuxer *demuxer);
@@ -330,8 +333,6 @@ void demux_set_wakeup_cb(struct demuxer *demuxer, void (*cb)(void *ctx), void *c
 void demux_start_prefetch(struct demuxer *demuxer);
 void demux_drive_nav(struct demuxer *demuxer);
 void demux_nav_refresh(struct demuxer *demuxer);
-void demux_set_stream_still_image(struct demuxer *demuxer,
-                                  struct sh_stream *sh, bool still_image);
 void demux_set_stream_absent(struct demuxer *demuxer, struct sh_stream *sh,
                              bool absent);
 void demux_set_stream_group(struct demuxer *demuxer,
