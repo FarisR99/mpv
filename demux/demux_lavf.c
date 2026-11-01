@@ -1635,6 +1635,10 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
                 av_dict_set(&opts[i], "request_sample_fmt", "dsd", 0);
         }
 #endif
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+        for (int i = 0; i < nb_streams; i++)
+            av_dict_set_int(&opts[i], "max_pixels", 4096 * 4096, 0);
+#endif
         int r = avformat_find_stream_info(avfc, opts);
         for (int i = 0; i < nb_streams; i++)
             av_dict_free(&opts[i]);
@@ -1891,7 +1895,8 @@ static void demux_drop_buffers_lavf(demuxer_t *demuxer)
     if (!priv->stream || priv->stream->seekable)
         av_seek_frame(priv->avfc, -1, 0, 1);
     demux_flush(demuxer);
-    stream_drop_buffers(priv->stream);
+    if (priv->stream)
+        stream_drop_buffers(priv->stream);
     avio_flush(priv->avfc->pb);
     if (priv->stream && !priv->stream->seekable) {
         // The stream may have been repositioned externally (disc seeks).

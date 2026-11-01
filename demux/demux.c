@@ -3534,8 +3534,16 @@ static struct demuxer *open_given_type(struct mpv_global *global,
     if (mp_cancel_test(sinfo->cancel))
         return NULL;
 
-    if (params && params->depth > 10) {
+    if (params->depth > 10) {
         mp_err(log, "Demuxer recursion depth exceeded.\n");
+        return NULL;
+    }
+
+    mp_dbg(log, "Trying demuxer: %s (force-level: %s)\n",
+           desc->name, d_level(check));
+
+    if (stream && !stream_seek(stream, 0)) {
+        mp_err(log, "Failed to rewind stream to the start.\n");
         return NULL;
     }
 
@@ -3563,7 +3571,7 @@ static struct demuxer *open_given_type(struct mpv_global *global,
         .opts_cache = opts_cache,
         .events = DEMUX_EVENT_INIT | DEMUX_EVENT_DURATION | DEMUX_EVENT_METADATA | DEMUX_EVENT_STREAMS,
         .duration = -1,
-        .depth = params ? params->depth : 0,
+        .depth = params->depth,
     };
 
     struct demux_internal *in = demuxer->in = talloc_ptrtype(demuxer, in);
@@ -3572,8 +3580,8 @@ static struct demuxer *open_given_type(struct mpv_global *global,
         .log = demuxer->log,
         .packet_pool = demux_packet_pool_get(global),
         .stats = stats_ctx_create(in, global, "demuxer"),
-        .can_cache = params && params->is_top_level,
-        .can_record = params && params->stream_record,
+        .can_cache = params->is_top_level,
+        .can_record = params->stream_record,
         .d_thread = talloc(demuxer, struct demuxer),
         .d_user = demuxer,
         .after_seek = true, // (assumed identical to initial demuxer state)
@@ -3589,16 +3597,6 @@ static struct demuxer *open_given_type(struct mpv_global *global,
     *in->d_thread = *demuxer;
 
     in->d_thread->metadata = talloc_zero(in->d_thread, struct mp_tags);
-
-    mp_dbg(log, "Trying demuxer: %s (force-level: %s)\n",
-           desc->name, d_level(check));
-
-    if (stream && !stream_seek(stream, 0)) {
-        mp_err(log, "Failed to rewind stream to the start.\n");
-        demuxer->stream = NULL;
-        demux_free(demuxer);
-        return NULL;
-    }
 
     in->d_thread->params = params; // temporary during open()
     int ret = demuxer->desc->open(in->d_thread, check);
@@ -3625,14 +3623,14 @@ static struct demuxer *open_given_type(struct mpv_global *global,
         in->events = DEMUX_EVENT_INIT | DEMUX_EVENT_DURATION | DEMUX_EVENT_METADATA | DEMUX_EVENT_STREAMS;
 
         struct demuxer *sub = NULL;
-        if (!(params && params->disable_timeline)) {
+        if (!params->disable_timeline) {
             struct timeline *tl = timeline_load(global, log, demuxer);
             if (tl) {
                 struct demuxer_params params2 = {0};
                 params2.timeline = tl;
-                params2.is_top_level = params && params->is_top_level;
-                params2.stream_record = params && params->stream_record;
-                params2.depth = params ? params->depth + 1 : 0;
+                params2.is_top_level = params->is_top_level;
+                params2.stream_record = params->stream_record;
+                params2.depth = params->depth + 1;
                 sub =
                     open_given_type(global, log, &demuxer_desc_timeline,
                                     NULL, sinfo, &params2, DEMUX_CHECK_FORCE);
@@ -3664,7 +3662,6 @@ static const int d_normal[]  = {DEMUX_CHECK_NORMAL, DEMUX_CHECK_UNSAFE, -1};
 static const int d_request[] = {DEMUX_CHECK_REQUEST, -1};
 static const int d_force[]   = {DEMUX_CHECK_FORCE, -1};
 
-// params can be NULL
 // This may free the stream parameter on success.
 static struct demuxer *demux_open(struct stream *stream,
                                   struct mp_cancel *cancel,
@@ -3675,7 +3672,7 @@ static struct demuxer *demux_open(struct stream *stream,
     const struct demuxer_desc *check_desc = NULL;
     struct mp_log *log = mp_log_new(NULL, global->log, "!demux");
     struct demuxer *demuxer = NULL;
-    char *force_format = params ? params->force_format : NULL;
+    char *force_format = params->force_format;
 
     struct parent_stream_info sinfo = {
         .seekable = stream->seekable,

@@ -53,13 +53,13 @@ static int mp_image_layout(int imgfmt, int w, int h, int stride_align,
 {
     struct mp_imgfmt_desc desc = mp_imgfmt_get_desc(imgfmt);
 
-    w = MP_ALIGN_UP(w, desc.align_x);
-    h = MP_ALIGN_UP(h, desc.align_y);
-
     struct mp_image_params params = {.imgfmt = imgfmt, .w = w, .h = h};
 
     if (!mp_image_params_valid(&params) || desc.flags & MP_IMGFLAG_HWACCEL)
         return -1;
+
+    w = MP_ALIGN_UP(w, desc.align_x);
+    h = MP_ALIGN_UP(h, desc.align_y);
 
     // Note: for non-mod-2 4:2:0 YUV frames, we have to allocate an additional
     //       top/right border. This is needed for correct handling of such
@@ -71,13 +71,19 @@ static int mp_image_layout(int imgfmt, int w, int h, int stride_align,
         int line_bytes = (alloc_w * desc.bpp[n] + 7) / 8;
         int align = mp_lcm(stride_align, (desc.bpp[n] && desc.bpp[n] % 8 == 0) ? desc.bpp[n] / 8 : 1);
         out_stride[n] = MP_ALIGN_NPOT(line_bytes, align);
-        out_plane_size[n] = out_stride[n] * alloc_h;
+        int64_t plane_size = (int64_t)out_stride[n] * alloc_h;
+        if (plane_size < 0 || plane_size > INT_MAX)
+            return -1;
+        out_plane_size[n] = plane_size;
     }
     if (desc.flags & MP_IMGFLAG_PAL)
         out_plane_size[1] = AVPALETTE_SIZE;
 
+    // Leave room for the stride_align bytes the callers add to the size.
     int sum = 0;
     for (int n = 0; n < MP_MAX_PLANES; n++) {
+        if (out_plane_size[n] > INT_MAX - stride_align - sum)
+            return -1;
         out_plane_offset[n] = out_plane_size[n] ? sum : -1;
         sum += out_plane_size[n];
     }
@@ -853,6 +859,11 @@ bool mp_image_params_valid(const struct mp_image_params *p)
     if (p->w <= 0 || p->h <= 0 || (p->w + 128LL) * (p->h + 128LL) >= INT_MAX / 8)
         return false;
 
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    if (p->w > 16384 || p->h > 16384)
+        return false;
+#endif
+
     if (p->p_w < 0 || p->p_h < 0)
         return false;
 
@@ -1201,18 +1212,10 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *src)
     if (sd) {
 #ifdef PL_HAVE_LAV_DOLBY_VISION
         const AVDOVIMetadata *metadata = (const AVDOVIMetadata *)sd->buf->data;
-#if PL_API_VER < 364
-        const AVDOVIRpuDataHeader *header = av_dovi_get_header(metadata);
-        if (header->disable_residual_flag)
-#elif PL_API_VER < 370
-        if (pl_avdovi_metadata_supported(metadata))
-#endif
-        {
-            dst->dovi = dovi = av_buffer_alloc(sizeof(struct pl_dovi_metadata));
-            MP_HANDLE_OOM(dovi);
-            pl_map_avdovi_metadata(&dst->params.color, &dst->params.repr,
-                                   (void *)dst->dovi->data, metadata);
-        }
+        dst->dovi = dovi = av_buffer_alloc(sizeof(struct pl_dovi_metadata));
+        MP_HANDLE_OOM(dovi);
+        pl_map_avdovi_metadata(&dst->params.color, &dst->params.repr,
+                               (void *)dst->dovi->data, metadata);
 #endif
     }
 

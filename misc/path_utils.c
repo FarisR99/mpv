@@ -189,7 +189,7 @@ char *mp_normalize_path(void *talloc_ctx, const char *path)
     if (!path)
         return NULL;
 
-    if (mp_is_url(bstr0(path)) || !strcmp(path, "-"))
+    if (!path[0] || mp_is_url(bstr0(path)) || !strcmp(path, "-"))
         return talloc_strdup(talloc_ctx, path);
 
     void *tmp = talloc_new(NULL);
@@ -258,6 +258,9 @@ char *mp_normalize_path(void *talloc_ctx, const char *path)
         result = talloc_strdup_append_buffer(result, "/");
         result = talloc_strndup_append_buffer(result, ptr, next - ptr);
     }
+
+    if (!result[0])
+        result = talloc_strdup_append_buffer(result, "/");
 
     result = talloc_steal(talloc_ctx, result);
 #endif

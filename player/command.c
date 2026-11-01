@@ -2306,7 +2306,8 @@ static int mp_property_list_tracks(void *ctx, struct m_property *prop,
                 res = append_track_info(res, track);
                 spacing = 1;
             }
-            spacing = 2;
+            if (spacing)
+                spacing = 2;
         }
 
         struct demuxer *demuxer = mpctx->demuxer;
@@ -5507,11 +5508,13 @@ fread_pic(FILE *fp, mp_image_t *dst, size_t bytesPerLine, size_t h, size_t strid
     size_t bytesRead = 0, expectedBytes = h * bytesPerLine;
     size_t src_off = offset, dst_off = 0;
     if (stride == dst->stride[0]) {
-        fseek(fp, src_off, SEEK_SET);
+        if (fseek(fp, src_off, SEEK_SET))
+            return false;
         bytesRead = fread(dst->planes[0], 1, expectedBytes, fp);
     } else {
         for (int i = 0; i < h; i++) {
-            fseek(fp, src_off, SEEK_SET);
+            if (fseek(fp, src_off, SEEK_SET))
+                break;
             size_t r = fread(dst->planes[0] + dst_off, 1, bytesPerLine, fp);
             if (r != bytesPerLine)
                 break;
@@ -8489,10 +8492,21 @@ void mp_option_run_callback(struct MPContext *mpctx, struct mp_option_callback *
 
     if (flags & UPDATE_VO && mpctx->video_out) {
         struct track *track = mpctx->current_track[0][STREAM_VIDEO];
+        struct mp_pin *filter_src = mpctx->vo_chain ? mpctx->vo_chain->filter_src : NULL;
         uninit_video_out(mpctx);
         handle_force_window(mpctx, true);
-        reinit_video_chain(mpctx);
-        if (track)
+
+        if (filter_src) {
+            reinit_video_chain_src(mpctx, NULL);
+            if (mpctx->vo_chain) {
+                mpctx->vo_chain->filter_src = filter_src;
+                mp_pin_connect(mpctx->vo_chain->filter->f->pins[0], filter_src);
+            }
+        } else {
+            reinit_video_chain(mpctx);
+        }
+
+        if (track || filter_src)
             queue_seek(mpctx, MPSEEK_RELATIVE, 0.0, MPSEEK_EXACT, 0);
 
         mp_wakeup_core(mpctx);

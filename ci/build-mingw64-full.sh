@@ -69,6 +69,30 @@ make install
 popd
 endgroup
 
+group "Building libarchive"
+$gitclone https://github.com/libarchive/libarchive.git
+mkdir -p libarchive/build
+pushd libarchive/build
+cmake -GNinja -DCMAKE_TOOLCHAIN_FILE="$FFBUILD_CMAKE_TOOLCHAIN" \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$FFBUILD_PREFIX" \
+      -DBUILD_SHARED_LIBS=OFF -DENABLE_{CAT,CPIO,TAR,TEST,UNZIP}=OFF \
+      -DENABLE_{LIBXML2,OPENSSL,PCRE2POSIX}=OFF ..
+ninja install
+popd
+endgroup
+
+group "Building uchardet"
+$gitclone -b v0.0.8 https://gitlab.freedesktop.org/uchardet/uchardet.git
+mkdir -p uchardet/build
+pushd uchardet/build
+cmake -GNinja -DCMAKE_TOOLCHAIN_FILE="$FFBUILD_CMAKE_TOOLCHAIN" \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$FFBUILD_PREFIX" \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DBUILD_SHARED_LIBS=OFF -DBUILD_BINARY=OFF ..
+ninja install
+popd
+endgroup
+
 group "Building subrandr"
 build_subrandr "$FFBUILD_PREFIX" --target "$FFBUILD_RUST_TARGET" \
                --static-library true --shared-library false
@@ -104,15 +128,19 @@ mpv_args=(
     --buildtype=release
     --prefer-static
     --default-library=shared
-    -Dc_link_args="$FF_LIBS"
-    -Dcpp_link_args="$FF_LIBS"
+    # With --prefer-static meson searches for libiconv only in the compiler's
+    # own directories, so pass it in the link args.
+    # https://github.com/mesonbuild/meson/issues/10172
+    -Dc_link_args="$FF_LIBS -L$FFBUILD_PREFIX/lib -liconv"
+    -Dcpp_link_args="$FF_LIBS -L$FFBUILD_PREFIX/lib -liconv"
     -Dgpl=$gpl
     --force-fallback-for=mujs
     -Dmujs:werror=false
     -Dmujs:default_library=static
     -Dlua=luajit
-    -D{amf,d3d11,javascript,lcms2,libbluray,libcurl,shaderc,sixel}=enabled
-    -D{spirv-cross,subrandr,vapoursynth,vulkan,win32-smtc,zimg}=enabled
+    -D{amf,d3d11,iconv,javascript,lcms2,libarchive,libbluray,libcurl}=enabled
+    -D{shaderc,sixel,spirv-cross,subrandr,uchardet,vapoursynth,vulkan}=enabled
+    -D{win32-smtc,zimg}=enabled
 )
 if $gpl; then
     # Only the GPL image carries the dependencies of the GPL features.

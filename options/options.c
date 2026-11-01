@@ -57,7 +57,6 @@ static void print_version(struct mp_log *log)
     mp_print_version(log, true);
 }
 
-extern const struct m_sub_options tv_params_conf;
 extern const struct m_sub_options stream_bluray_conf;
 extern const struct m_sub_options stream_cdda_conf;
 extern const struct m_sub_options stream_dvb_conf;
@@ -920,7 +919,9 @@ static const m_option_t mp_opts[] = {
     {"input-terminal", OPT_BOOL(consolecontrols), .flags = UPDATE_TERM},
 
     {"input-ipc-server", OPT_STRING(ipc_path), .flags = M_OPT_FILE},
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
     {"input-ipc-client", OPT_STRING(ipc_client)},
+#endif
 
     {"screenshot", OPT_SUBSTRUCT(screenshot_image_opts, screenshot_conf)},
     {"screenshot-template", OPT_STRING(screenshot_template)},

@@ -102,9 +102,8 @@ static pid_t spawn_process_inner(const char *path, struct mp_subprocess_opts *op
                                  int src_fds[], bool detach, void *stacks[]);
 
 // This function is called from a clone(CLONE_VM)/rfork_thread context where
-// the child shares the parent's address space. Use MP_NO_ASAN to avoid false
-// positives from ASan when the child writes to shared memory.
-MP_NO_ASAN static int child_main(void* args)
+// the child shares the parent's address space.
+static int child_main(void* args)
 {
     struct child_args *child_args = args;
     const char *path = child_args->path;
@@ -155,7 +154,7 @@ static pid_t spawn_process_inner(const char *path, struct mp_subprocess_opts *op
         .path = path,
         .opts = opts,
         .src_fds = src_fds,
-        .child_stack = stacks[1],
+        .child_stack = detach ? stacks[1] : NULL,
         .pipe_end = -1,
         .failed = false,
         .detach = detach,

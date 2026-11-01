@@ -188,6 +188,7 @@ static void update_render_options(struct vo *vo);
 static void update_lut(struct priv *p, struct user_lut *lut);
 
 struct gl_next_opts {
+    struct pl_tone_map_constants tone_constants;
     bool delayed_peak;
     int sub_hdr_peak;
     int image_subs_hdr_peak;
@@ -215,6 +216,17 @@ const struct m_opt_choice_alternatives lut_types[] = {
 #define OPT_BASE_STRUCT struct gl_next_opts
 const struct m_sub_options gl_next_conf = {
     .opts = (const struct m_option[]) {
+        {"tone-mapping-knee-adaptation", OPT_FLOAT(tone_constants.knee_adaptation), M_RANGE(0, 1)},
+        {"tone-mapping-knee-minimum", OPT_FLOAT(tone_constants.knee_minimum), M_RANGE(0, 0.5)},
+        {"tone-mapping-knee-maximum", OPT_FLOAT(tone_constants.knee_maximum), M_RANGE(0.5, 1)},
+        {"tone-mapping-knee-default", OPT_FLOAT(tone_constants.knee_default), M_RANGE(0, 1)},
+        {"tone-mapping-knee-offset", OPT_FLOAT(tone_constants.knee_offset), M_RANGE(0.5, 2)},
+        {"tone-mapping-slope-tuning", OPT_FLOAT(tone_constants.slope_tuning), M_RANGE(0, 10)},
+        {"tone-mapping-slope-offset", OPT_FLOAT(tone_constants.slope_offset), M_RANGE(0, 1)},
+        {"tone-mapping-spline-contrast", OPT_FLOAT(tone_constants.spline_contrast), M_RANGE(0, 1.5)},
+        {"tone-mapping-reinhard-contrast", OPT_FLOAT(tone_constants.reinhard_contrast), M_RANGE(0, 1)},
+        {"tone-mapping-linear-knee", OPT_FLOAT(tone_constants.linear_knee), M_RANGE(0, 1)},
+        {"tone-mapping-exposure", OPT_FLOAT(tone_constants.exposure), M_RANGE(0, 10)},
         {"sub-hdr-peak", OPT_CHOICE(sub_hdr_peak, {"auto", 0}, {"sdr", PL_COLOR_SDR_WHITE}),
             M_RANGE(10, 10000)},
         {"image-subs-hdr-peak", OPT_CHOICE(image_subs_hdr_peak, {"sdr", PL_COLOR_SDR_WHITE},
@@ -241,6 +253,7 @@ const struct m_sub_options gl_next_conf = {
         {0},
     },
     .defaults = &(struct gl_next_opts) {
+        .tone_constants = { PL_TONE_MAP_CONSTANTS },
         .border_background = BACKGROUND_COLOR,
         .background_blur_radius = 16.0f,
         .inter_preserve = true,
@@ -872,7 +885,6 @@ static void hwdec_release(pl_gpu gpu, struct pl_frame *frame)
     slot_release(&p->hwdec);
 }
 
-#if PL_API_VER >= 367
 static bool hwdec_acquire_el(pl_gpu gpu, struct pl_frame *frame)
 {
     struct mp_image *bl_mpi = frame->user_data;
@@ -891,7 +903,6 @@ static void hwdec_release_el(pl_gpu gpu, struct pl_frame *frame)
     struct priv *p = fp->vo->priv;
     slot_release(&p->el_hwdec);
 }
-#endif
 
 static bool format_supported(struct vo *vo, int format, bool use_uint)
 {
@@ -917,15 +928,10 @@ static float get_ref_luma(struct priv *p)
     if (opts->hdr_reference_white)
         return opts->hdr_reference_white;
 
-#if PL_API_VER >= 371
     // auto: follow the system reference white, if available
-    // Use auto mode only on libplacebo >= 371, to avoid luminance mismatches,
-    // on SDR->SDR in some corner cases. User override is still respected, to
-    // preserve previous behavior.
     struct ra_swapchain *sw = p->ra_ctx->swapchain;
     if (sw->fns->target_ref_luma)
         return sw->fns->target_ref_luma(sw);
-#endif
 
     return 0;
 }
@@ -934,10 +940,8 @@ static bool use_ref_luma(const struct pl_color_space *csp, const struct pl_color
 {
     if (!pl_color_transfer_is_hdr(csp->transfer))
         return true;
-#if PL_API_VER >= 362
     if (csp->transfer == PL_COLOR_TRC_SCRGB && target_csp && !pl_color_transfer_is_hdr(target_csp->transfer))
         return true;
-#endif
     return false;
 }
 
@@ -1070,7 +1074,6 @@ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src
     // Update chroma location, must be done after initializing planes
     pl_frame_set_chroma_location(frame, par.chroma_location);
 
-#if PL_API_VER >= 367
     if (mpi->enhancement_layer) {
         struct mp_image *el = mpi->enhancement_layer;
         fp->el_hwdec = ra_hwdec_get(&p->hwdec_ctx, el->imgfmt);
@@ -1110,7 +1113,6 @@ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src
                     "rendering base layer only.\n");
         }
     }
-#endif
 
     if (mpi->film_grain)
         pl_film_grain_from_av(&frame->film_grain, (AVFilmGrainParams *) mpi->film_grain->data);
@@ -1261,11 +1263,9 @@ static void apply_target_options(struct priv *p, struct pl_frame *target,
         struct ra_swapchain *sw = p->ra_ctx->swapchain;
         dither_depth = sw->fns->color_depth ? sw->fns->color_depth(sw) : 0;
     }
-#if PL_API_VER >= 362
     // Don't dither scRGB, assume downstream will handle quantization properly.
     if (target->color.transfer == PL_COLOR_TRC_SCRGB)
         dither_depth = -1;
-#endif
     if (dither_depth > 0) {
         struct pl_bit_encoding *tbits = &target->repr.bits;
         tbits->color_depth += dither_depth - tbits->sample_depth;
@@ -1619,9 +1619,7 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
     apply_target_options(p, &target, hint.hdr.min_luma, strict_sw_params,
                          target_ref_luma, &target_csp);
     bool clip_gamut = pl_primaries_valid(&target.color.hdr.prim);
-#if PL_API_VER >= 362
     clip_gamut = clip_gamut && target.color.transfer != PL_COLOR_TRC_SCRGB;
-#endif
     if (clip_gamut) {
         // Ensure resulting gamut still fits inside container
         target.color.hdr.prim = pl_primaries_clip(&target.color.hdr.prim,
@@ -2967,16 +2965,15 @@ static void update_render_options(struct vo *vo)
     };
 
     pars->color_map_params.tone_mapping_function = tone_map_funs[opts->tone_map.curve];
-AV_NOWARN_DEPRECATED(
-    pars->color_map_params.tone_mapping_param = opts->tone_map.curve_param;
-    if (isnan(pars->color_map_params.tone_mapping_param)) // vo_gpu compatibility
-        pars->color_map_params.tone_mapping_param = 0.0;
-)
+    pars->color_map_params.tone_constants = p->next_opts->tone_constants;
+
     pars->color_map_params.inverse_tone_mapping = opts->tone_map.inverse;
     pars->color_map_params.contrast_recovery = opts->tone_map.contrast_recovery;
     pars->color_map_params.visualize_lut = opts->tone_map.visualize;
     pars->color_map_params.contrast_smoothness = opts->tone_map.contrast_smoothness;
     pars->color_map_params.gamut_mapping = gamut_modes[opts->tone_map.gamut_mode];
+    pars->color_map_params.mastering_clip = opts->tone_map.mastering_clip;
+    pars->color_map_params.film_strength = opts->tone_map.film_strength;
 
     pars->params.dither_params = NULL;
     pars->params.error_diffusion = NULL;

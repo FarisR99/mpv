@@ -1647,7 +1647,9 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track, int idx)
         extradata = track->private_data + 40;
         extradata_size = track->private_size - 40;
         mp_set_codec_from_tag(sh_v);
-        track->block_dts = true;
+        // The DTS are the PTS if the codec does not reorder frames.
+        const AVCodecDescriptor *desc = avcodec_descriptor_get(mp_codec_to_av_codec_id(sh_v->codec));
+        track->block_dts = !desc || (desc->props & AV_CODEC_PROP_REORDER);
     } else if (track->private_size >= RVPROPERTIES_SIZE
                && (!strcmp(track->codec_id, "V_REAL/RV10")
                 || !strcmp(track->codec_id, "V_REAL/RV20")
@@ -3207,6 +3209,8 @@ static int handle_block(demuxer_t *demuxer, struct block_info *block_info)
                 int64_t padding = av_rescale(block_info->discardpadding,
                                              stream->codec->samplerate,
                                              1000000000);
+                if (padding < -INT_MAX || padding > INT_MAX)
+                    padding = 0;
                 int start = 0, end = 0;
                 if (padding < 0 && i == 0)
                     start = -padding;
@@ -3253,17 +3257,18 @@ static int read_block_group(demuxer_t *demuxer, int64_t end,
 
     while (stream_tell(s) < end) {
         switch (ebml_read_id(s)) {
-        case MATROSKA_ID_BLOCKDURATION:
-            block->duration = ebml_read_uint(s);
-            if (block->duration == EBML_UINT_INVALID)
+        case MATROSKA_ID_BLOCKDURATION:;
+            uint64_t duration;
+            if (!ebml_read_uint(s, &duration))
                 goto error;
-            block->duration *= mkv_d->tc_scale;
-            block->duration_known = true;
+            if (duration <= INT64_MAX / mkv_d->tc_scale) {
+                block->duration = duration * mkv_d->tc_scale;
+                block->duration_known = true;
+            }
             break;
 
         case MATROSKA_ID_DISCARDPADDING:
-            block->discardpadding = ebml_read_int(s);
-            if (block->discardpadding == EBML_INT_INVALID)
+            if (!ebml_read_int(s, &block->discardpadding))
                 goto error;
             break;
 
@@ -3273,8 +3278,8 @@ static int read_block_group(demuxer_t *demuxer, int64_t end,
             break;
 
         case MATROSKA_ID_REFERENCEBLOCK:;
-            int64_t num = ebml_read_int(s);
-            if (num == EBML_INT_INVALID)
+            int64_t num;
+            if (!ebml_read_int(s, &num))
                 goto error;
             block->keyframe = false;
             break;
@@ -3322,8 +3327,9 @@ static int read_next_block_into_queue(demuxer_t *demuxer)
             int64_t start_filepos = stream_tell(s);
             switch (ebml_read_id(s)) {
             case MATROSKA_ID_TIMECODE: {
-                uint64_t num = ebml_read_uint(s);
-                if (num == EBML_UINT_INVALID)
+                uint64_t num;
+                // Block timestamps add up to INT16_MAX ticks to this.
+                if (!ebml_read_uint(s, &num) || num > INT64_MAX / mkv_d->tc_scale - INT16_MAX)
                     goto find_next_cluster;
                 mkv_d->cluster_tc = num * mkv_d->tc_scale;
                 break;
