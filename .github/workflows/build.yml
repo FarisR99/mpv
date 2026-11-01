@@ -562,7 +562,7 @@ jobs:
 
   publish:
     name: Publish release
-    needs: [mingw, mingw64-full, win32, macos]
+    needs: [mingw, mingw64-full, win32]
     if: github.event_name == 'push' && github.repository == 'mpv-player/mpv' &&
         (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v0.'))
     runs-on: ubuntu-slim
