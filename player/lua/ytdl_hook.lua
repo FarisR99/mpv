@@ -413,7 +413,7 @@ local function edl_track_joined(fragments, protocol, is_live, base)
         table.insert(parts, edl_escape(join_url(base, fragment)))
         if fragment.duration then
             parts[#parts] =
-                parts[#parts] .. ",length="..fragment.duration
+                parts[#parts] .. ",length="..edl_escape(fragment.duration)
         end
     end
     return edl .. table.concat(parts, ";") .. ";"
@@ -502,6 +502,8 @@ local function formats_to_edl(json, formats, use_all_formats)
         has_video_only = has_video_only or video_only
     end
 
+    local has_video_track = false
+    local has_audio_track = false
     local has_requested_video = false
     local has_requested_audio = false
     local next_program_id = 0
@@ -529,6 +531,7 @@ local function formats_to_edl(json, formats, use_all_formats)
                 media_type = "video",
                 codec = map_codec_to_mpv(track.vcodec),
             }
+            has_video_track = true
             if is_default then
                 has_requested_video = true
             end
@@ -539,6 +542,7 @@ local function formats_to_edl(json, formats, use_all_formats)
                 codec = map_codec_to_mpv(track.acodec) or
                         ext_map[track.ext],
             }
+            has_audio_track = true
             if is_default then
                 has_requested_audio = true
             end
@@ -638,7 +642,10 @@ local function formats_to_edl(json, formats, use_all_formats)
         return nil
     end
 
-    if has_requested_audio ~= has_requested_video then
+    -- Only deselect the type that wasn't requested if there are tracks of
+    -- that type, so that e.g. thumbnails of audio-only sources stay selected.
+    if has_requested_audio ~= has_requested_video and
+       has_audio_track and has_video_track then
         local not_req_prop = has_requested_video and "aid" or "vid"
         if mp.get_property(not_req_prop) == "auto" then
             mp.set_property("file-local-options/" .. not_req_prop, "no")
@@ -765,7 +772,7 @@ local function add_single_video(json)
                 msg.verbose("Skipping subtitle ["..lang.."] with protocol "..
                             sub_info.protocol)
             elseif sub_info.data ~= nil then
-                sub = "memory://"..sub_info.data
+                sub = "data://text/plain,"..sub_info.data
             elseif sub_info.url ~= nil and
                 url_is_safe(sub_info.url) then
                 sub = sub_info.url
@@ -795,7 +802,7 @@ local function add_single_video(json)
 
         for i = #json.thumbnails, 1, -1 do
             local thumb_info = json.thumbnails[i]
-            if thumb_info.url ~= nil then
+            if thumb_info.url ~= nil and url_is_safe(thumb_info.url) then
                 if o.thumbnails == 'all' then
                     msg.verbose("adding thumbnail")
                     mp.commandv("video-add", thumb_info.url, "auto")
@@ -1125,7 +1132,7 @@ local function run_ytdl_hook(url)
                             else
                                 subfile = subfile..edl_escape("memory://WEBVTT")
                             end
-                            subfile = subfile..",length="..entry.duration..";"
+                            subfile = subfile..",length="..edl_escape(entry.duration)..";"
                         end
                         msg.debug(j.." sub EDL: "..subfile)
                         mp.commandv("sub-add", subfile, "auto", req.ext, j)
@@ -1143,11 +1150,6 @@ local function run_ytdl_hook(url)
                 local site = entry.url
                 local title = entry.title
 
-                if title ~= nil then
-                    title = string.gsub(title, '%s+', ' ')
-                    table.insert(playlist, "#EXTINF:0," .. title)
-                end
-
                 --[[ some extractors will still return the full info for
                      all clips in the playlist and the URL will point
                      directly to the file in that case, which we don't
@@ -1164,6 +1166,9 @@ local function run_ytdl_hook(url)
                 -- links without protocol as returned by --flat-playlist
                 if not site then
                     msg.error("Playlist entry does not have unique URL, can't add it.")
+                elseif site:find("%c") then
+                    -- a line break would add entries to the playlist
+                    msg.error("Playlist entry URL contains control characters, can't add it.")
                 elseif not site:find("://") then
                     -- youtube extractor provides only IDs,
                     -- others come prefixed with the extractor name and ":"
@@ -1175,6 +1180,10 @@ local function run_ytdl_hook(url)
                 end
 
                 if playlist_url then
+                    if title ~= nil then
+                        title = string.gsub(title, '%s+', ' ')
+                        table.insert(playlist, "#EXTINF:0," .. title)
+                    end
                     table.insert(playlist, playlist_url)
                     -- save the cookies in a table for the playlist hook
                     playlist_cookies[playlist_url] = entry.cookies or json.cookies

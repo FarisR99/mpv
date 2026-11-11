@@ -530,9 +530,7 @@ static enum pl_color_system mp_image_params_get_forced_csp(struct mp_image_param
     int imgfmt = params->hw_subfmt ? params->hw_subfmt : params->imgfmt;
     enum pl_color_system csp = mp_imgfmt_get_forced_csp(imgfmt);
 
-    // RGB formats carry XYZ when tagged as such, or with ST 428-1 primaries
-    if (csp == PL_COLOR_SYSTEM_RGB && (params->repr.sys == PL_COLOR_SYSTEM_XYZ ||
-                                       params->color.primaries == PL_COLOR_PRIM_CIE_1931))
+    if (csp == PL_COLOR_SYSTEM_RGB && params->repr.sys == PL_COLOR_SYSTEM_XYZ)
         csp = PL_COLOR_SYSTEM_XYZ;
 
     return csp;
@@ -860,7 +858,7 @@ bool mp_image_params_valid(const struct mp_image_params *p)
         return false;
 
 #ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    if (p->w > 16384 || p->h > 16384)
+    if (p->w > 16384 || p->h > 16384 || p->w * p->h > 2048 * 2048)
         return false;
 #endif
 
@@ -1313,8 +1311,6 @@ struct AVFrame *mp_image_to_av_frame(struct mp_image *src)
     }
 
     pl_avframe_set_color(dst, params.color);
-    if (params.repr.sys == PL_COLOR_SYSTEM_XYZ)
-        dst->color_primaries = AVCOL_PRI_SMPTE428;
 
     {
         AVFrameSideData *sd = av_frame_new_side_data(dst,

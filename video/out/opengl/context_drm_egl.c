@@ -49,6 +49,7 @@
 
 struct gbm_frame {
     struct gbm_bo *bo;
+    struct pl_color_space color;
 };
 
 struct gbm {
@@ -77,7 +78,7 @@ struct priv {
     struct mpv_opengl_drm_params_v2 drm_params;
     struct mpv_opengl_drm_draw_surface_size draw_surface_size;
 
-    bool allow_modeset;
+    struct pl_color_space committed_color;
 };
 
 // Not general. Limited to only the formats being used in this module
@@ -217,6 +218,21 @@ static bool init_egl(struct ra_ctx *ctx)
     return true;
 }
 
+static struct gbm_surface *create_gbm_surface(struct ra_ctx *ctx,
+                                              const uint64_t *modifiers,
+                                              unsigned int num_modifiers)
+{
+    struct priv *p = ctx->priv;
+    return gbm_surface_create_with_modifiers2(
+        p->gbm.device,
+        p->draw_surface_size.width,
+        p->draw_surface_size.height,
+        p->gbm_format,
+        modifiers,
+        num_modifiers,
+        GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+}
+
 static bool init_gbm(struct ra_ctx *ctx)
 {
     struct priv *p = ctx->priv;
@@ -230,27 +246,12 @@ static bool init_gbm(struct ra_ctx *ctx)
 
     MP_VERBOSE(ctx->vo, "Initializing GBM surface (%d x %d)\n",
         p->draw_surface_size.width, p->draw_surface_size.height);
-    if (p->num_gbm_modifiers > 0) {
-        p->gbm.surface = gbm_surface_create_with_modifiers(
-            p->gbm.device,
-            p->draw_surface_size.width,
-            p->draw_surface_size.height,
-            p->gbm_format,
-            p->gbm_modifiers,
-            p->num_gbm_modifiers);
-        if (!p->gbm.surface) {
-            MP_VERBOSE(ctx->vo, "gbm_surface_create_with_modifiers failed\n");
-        }
-    }
-    if (!p->gbm.surface) {
-        // Either gbm_surface_create_with_modifiers failed or
-        // p->num_gbm_modifiers == 0
-        p->gbm.surface = gbm_surface_create(
-            p->gbm.device,
-            p->draw_surface_size.width,
-            p->draw_surface_size.height,
-            p->gbm_format,
-            GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+    p->gbm.surface = create_gbm_surface(ctx, p->gbm_modifiers, p->num_gbm_modifiers);
+    // GBM may not support the modifiers the plane advertises.
+    if (!p->gbm.surface && p->num_gbm_modifiers) {
+        MP_VERBOSE(ctx->vo, "Failed to create GBM surface with explicit modifiers: %s\n",
+                   mp_strerror(errno));
+        p->gbm.surface = create_gbm_surface(ctx, NULL, 0);
     }
     if (!p->gbm.surface) {
         MP_ERR(ctx->vo, "Failed to create GBM surface.\n");
@@ -330,26 +331,32 @@ static void queue_flip(struct ra_ctx *ctx, struct gbm_frame *frame)
     drm_object_set_property(atomic_ctx->request, atomic_ctx->draw_plane, "CRTC_ID", atomic_ctx->crtc->id);
     drm_object_set_property(atomic_ctx->request, atomic_ctx->draw_plane, "ZPOS", 1);
 
-    if (p->allow_modeset)
+    bool set_color = !pl_color_space_equal(&frame->color, &p->committed_color);
+    if (set_color) {
+        vo_drm_set_colorspace_blob(ctx->vo, &frame->color);
         flags |= DRM_MODE_ATOMIC_ALLOW_MODESET;
-
+    }
     int ret = drmModeAtomicCommit(drm->fd, atomic_ctx->request, flags, drm);
-
-    if (ret)
+    if (ret) {
         MP_WARN(ctx->vo, "Failed to commit atomic request: %s\n", mp_strerror(ret));
+        if (set_color)
+            frame->color = p->committed_color;
+    }
+
     drm->waiting_for_flip = !ret;
-    p->allow_modeset = !ret;
+    p->committed_color = !ret ? frame->color : p->committed_color;
 
     drmModeAtomicFree(atomic_ctx->request);
     atomic_ctx->request = drmModeAtomicAlloc();
 }
 
-static void enqueue_bo(struct ra_ctx *ctx, struct gbm_bo *bo)
+static void enqueue_bo(struct ra_ctx *ctx, struct gbm_bo *bo, struct pl_color_space color)
 {
     struct priv *p = ctx->priv;
 
-    struct gbm_frame *new_frame = talloc(p, struct gbm_frame);
+    struct gbm_frame *new_frame = talloc_zero(p, struct gbm_frame);
     new_frame->bo = bo;
+    new_frame->color = color;
     MP_TARRAY_APPEND(p, p->gbm.bo_queue, p->gbm.num_bos, new_frame);
 }
 
@@ -393,7 +400,7 @@ static void drm_egl_swap_buffers(struct ra_ctx *ctx)
         MP_ERR(ctx->vo, "Couldn't lock front buffer\n");
         return;
     }
-    enqueue_bo(ctx, new_bo);
+    enqueue_bo(ctx, new_bo, drm->colorspace);
 
     while (drm->redraw || p->gbm.num_bos > ctx->vo->opts->swapchain_depth ||
            !gbm_surface_has_free_buffers(p->gbm.surface)) {
@@ -558,9 +565,8 @@ static pl_color_space_t drm_egl_preferred_csp(struct ra_ctx *ctx)
 
 static bool drm_egl_set_color(struct ra_ctx *ctx, struct mp_image_params *params)
 {
-    struct priv *p = ctx->priv;
     struct pl_color_space sdr = pl_color_space_srgb;
-    p->allow_modeset |= vo_drm_set_color(ctx->vo, params ? &params->color : &sdr);
+    vo_drm_set_color(ctx->vo, params ? &params->color : &sdr);
     return true;
 }
 
@@ -650,7 +656,7 @@ static bool drm_egl_init(struct ra_ctx *ctx)
         goto err;
     }
 
-    enqueue_bo(ctx, new_bo);
+    enqueue_bo(ctx, new_bo, pl_color_space_srgb);
     update_framebuffer_from_bo(ctx, new_bo);
     if (!drm->fb || !drm->fb->id) {
         MP_ERR(ctx, "Failed to create framebuffer.\n");

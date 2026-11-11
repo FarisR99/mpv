@@ -5560,6 +5560,10 @@ static void cmd_overlay_add(void *pcmd)
         MP_ERR(mpctx, "overlay-add: inconsistent parameters\n");
         goto error;
     }
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    // The source is memory, an fd or a file, never the fuzzer input.
+    goto error;
+#endif
     struct overlay overlay = {
         .source = mp_image_alloc(IMGFMT_BGRA, w, h),
         .x = x,
@@ -7332,7 +7336,7 @@ static void cmd_key(void *p)
     int action = *(int *)cmd->priv;
 
     const char *key_name = cmd->args[0].v.s;
-    if (key_name[0] == '\0' && action == MP_KEY_STATE_UP) {
+    if ((!key_name || key_name[0] == '\0') && action == MP_KEY_STATE_UP) {
         mp_input_put_key_artificial(mpctx->input, MP_INPUT_RELEASE_ALL, 1);
     } else {
         int code = mp_input_get_key_from_name(key_name);
